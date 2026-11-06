@@ -58,3 +58,4 @@ def test_smart_money_score_calculation(whale_engine):
         confidence=0.90,
     )
     assert 60.0 <= score <= 100.0
+

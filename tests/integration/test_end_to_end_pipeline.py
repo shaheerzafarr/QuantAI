@@ -81,3 +81,4 @@ def test_full_autonomous_cycle():
         order = exec_engine.execute_order(verdict, latest_price)
         assert order is not None
         assert order.status == "filled"
+

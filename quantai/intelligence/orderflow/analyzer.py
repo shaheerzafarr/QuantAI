@@ -126,3 +126,4 @@ class OrderFlowAnalyzer:
             liquidity_clusters=depth_metrics["clusters"],
             summary_bias=bias,
         )
+

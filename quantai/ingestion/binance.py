@@ -174,3 +174,4 @@ class BinanceMarketDataClient:
 
     def close(self):
         self._session.close()
+

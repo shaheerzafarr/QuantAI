@@ -21,7 +21,7 @@ class TechnicalFeatureEngine:
 
         data = [
             {
-                "timestamp": c.timestamp,
+                "timestamp": getattr(c, "timestamp", getattr(c, "event_time", None)),
                 "open": float(c.open),
                 "high": float(c.high),
                 "low": float(c.low),

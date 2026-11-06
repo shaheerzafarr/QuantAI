@@ -1,9 +1,28 @@
 """Core Configuration Models and Settings for QuantAI."""
 
+import os
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel, Field
+
+
+def _load_dotenv(filepath: str = ".env"):
+    if not os.path.exists(filepath):
+        return
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
 
 
 class ExecutionMode(str, Enum):
@@ -85,5 +104,33 @@ _default_config: Optional[QuantAIConfig] = None
 def get_config() -> QuantAIConfig:
     global _default_config
     if _default_config is None:
-        _default_config = QuantAIConfig()
+        _load_dotenv()
+        cfg = QuantAIConfig()
+        
+        # Override with environment variables if available
+        if "BINANCE_API_KEY" in os.environ and os.environ["BINANCE_API_KEY"]:
+            cfg.exchange.api_key = os.environ["BINANCE_API_KEY"]
+        if "BINANCE_API_SECRET" in os.environ and os.environ["BINANCE_API_SECRET"]:
+            cfg.exchange.api_secret = os.environ["BINANCE_API_SECRET"]
+        if "DATABASE_URL" in os.environ and os.environ["DATABASE_URL"]:
+            cfg.storage.database_url = os.environ["DATABASE_URL"]
+        if "REDIS_URL" in os.environ and os.environ["REDIS_URL"]:
+            cfg.storage.redis_url = os.environ["REDIS_URL"]
+        if "EXECUTION_MODE" in os.environ and os.environ["EXECUTION_MODE"]:
+            mode_str = os.environ["EXECUTION_MODE"].lower()
+            if mode_str in [m.value for m in ExecutionMode]:
+                cfg.execution_mode = ExecutionMode(mode_str)
+        if "MAX_DAILY_LOSS_PCT" in os.environ:
+            try:
+                cfg.risk.max_daily_loss_pct = float(os.environ["MAX_DAILY_LOSS_PCT"])
+            except ValueError:
+                pass
+        if "MAX_TOTAL_DRAWDOWN_PCT" in os.environ:
+            try:
+                cfg.risk.max_total_drawdown_pct = float(os.environ["MAX_TOTAL_DRAWDOWN_PCT"])
+            except ValueError:
+                pass
+                
+        _default_config = cfg
     return _default_config
+

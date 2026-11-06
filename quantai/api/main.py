@@ -5,10 +5,11 @@ import os
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from quantai.config.settings import get_config
+from quantai.monitoring.metrics import MetricsCollector
 from quantai.ingestion.pipeline import IngestionPipeline
 from quantai.intelligence.technical.feature_engine import TechnicalFeatureEngine
 from quantai.intelligence.market_regime.detector import MarketRegimeDetector
@@ -62,6 +63,12 @@ def get_health() -> Dict[str, Any]:
         "emergency_halt": risk_guardian.emergency_halt,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def get_prometheus_metrics() -> str:
+    """Exposes real-time Prometheus telemetry metrics."""
+    return MetricsCollector.format_prometheus_metrics(risk_guardian, execution_engine)
 
 
 @app.get("/api/v1/portfolio")

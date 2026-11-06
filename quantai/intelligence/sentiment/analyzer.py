@@ -80,3 +80,4 @@ class SentimentAnalyzer:
         elif val <= 75:
             return "Greed"
         return "Extreme Greed"
+

@@ -443,3 +443,4 @@ class ExecutionAnalyst(BaseAnalyst):
             key_findings=[f"Spread: {spread:.4f}. Maker limit orders recommended over aggressive market orders."],
             actionable_recommendation="HOLD",
         )
+

@@ -203,3 +203,4 @@ class IndependentRiskGuardian:
             risk_reward_ratio=0.0,
             veto_reason=reason,
         )
+

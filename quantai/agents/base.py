@@ -29,3 +29,4 @@ class BaseAnalyst(ABC):
     def evaluate(self, context: Dict[str, Any]) -> AgentReport:
         """Process analytical context and generate auditable structured report."""
         pass
+

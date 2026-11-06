@@ -30,3 +30,4 @@ def test_multi_agent_swarm_execution():
         assert r.bias in ["BULLISH", "BEARISH", "NEUTRAL"]
         assert 0.0 <= r.confidence <= 1.0
         assert r.actionable_recommendation in ["BUY", "SELL", "HOLD"]
+

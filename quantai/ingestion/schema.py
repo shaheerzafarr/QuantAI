@@ -81,3 +81,4 @@ class NewsSentimentData(IngestionRecord):
     sentiment_score: float  # -1.0 to 1.0
     sentiment_label: str  # bullish, bearish, neutral
     impact_weight: float = 0.5
+

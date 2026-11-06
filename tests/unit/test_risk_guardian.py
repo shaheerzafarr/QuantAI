@@ -75,3 +75,4 @@ def test_emergency_halt_on_drawdown(risk_guardian):
     verdict = risk_guardian.evaluate_decision(decision, current_price=68000.0)
     assert not verdict.approved
     assert "emergency circuit breaker" in verdict.veto_reason.lower()
+

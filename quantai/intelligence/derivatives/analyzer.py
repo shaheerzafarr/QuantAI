@@ -70,3 +70,4 @@ class DerivativesAnalyzer:
             futures_basis_bps=data.futures_basis_bps,
             summary_bias=summary_bias,
         )
+

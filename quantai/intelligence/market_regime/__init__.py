@@ -7,3 +7,4 @@ from quantai.intelligence.market_regime.detector import (
 )
 
 __all__ = ["MarketRegimeDetector", "MarketRegime", "RegimeState"]
+

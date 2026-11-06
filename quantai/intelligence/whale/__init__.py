@@ -7,3 +7,4 @@ from quantai.intelligence.whale.engine import (
 )
 
 __all__ = ["WhaleIntelligenceEngine", "WhaleSignal", "WalletCategory"]
+

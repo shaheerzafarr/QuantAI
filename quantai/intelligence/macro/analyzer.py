@@ -74,3 +74,4 @@ class MacroAnalyzer:
             stablecoin_supply_change_pct=self._stable_growth,
             crypto_macro_tailwind=tailwind,
         )
+

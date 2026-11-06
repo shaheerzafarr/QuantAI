@@ -342,3 +342,4 @@ class SystemEvent(Base):
     message = Column(Text, nullable=False)
     payload = Column(JSON, nullable=True)
     timestamp = Column(DateTime, nullable=False, index=True)
+
