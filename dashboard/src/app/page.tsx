@@ -39,10 +39,32 @@ interface WhaleEventRecord {
   timestamp: string;
 }
 
+interface MarkedTradeRecord {
+  trade_id: string;
+  status: string;
+  pair: string;
+  side: string;
+  entry_time: string;
+  exit_time: string;
+  entry_price: number;
+  exit_price: number;
+  take_profit: number;
+  stop_loss: number;
+  risk_reward: number;
+  allocated_usd: number;
+  realized_pnl_usd: number;
+  realized_pnl_pct: number;
+  exit_reason: string;
+  thesis_confirmed: string;
+  strategy_rationale: string;
+}
+
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
   const [whales, setWhales] = useState<WhaleEventRecord[]>([]);
+  const [markedTrades, setMarkedTrades] = useState<MarkedTradeRecord[]>([]);
+  const [selectedPair, setSelectedPair] = useState<string>("BTC");
   const [loading, setLoading] = useState(false);
   const [cycleMsg, setCycleMsg] = useState<string | null>(null);
 
@@ -56,6 +78,9 @@ export default function Dashboard() {
 
       const whaleRes = await fetch("http://localhost:8000/api/v1/intelligence/whale?limit=6");
       if (whaleRes.ok) setWhales(await whaleRes.json());
+
+      const tradesRes = await fetch(`http://localhost:8000/api/v1/trades/live-ledger?pair=${selectedPair}`);
+      if (tradesRes.ok) setMarkedTrades(await tradesRes.json());
     } catch (err) {
       console.error("Telemetry sync error:", err);
     }
@@ -65,7 +90,7 @@ export default function Dashboard() {
     fetchTelemetry();
     const interval = setInterval(fetchTelemetry, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedPair]);
 
   const triggerCycle = async (symbol: string) => {
     setLoading(true);
@@ -84,12 +109,33 @@ export default function Dashboard() {
     }
   };
 
+  const triggerReplay = async (symbol: string) => {
+    setLoading(true);
+    setCycleMsg(`Running forward replay audit on ${symbol} (120 15m candles)...`);
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/pipeline/replay?symbol=${encodeURIComponent(symbol)}&candles=120&timeframe=15m`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      setCycleMsg(`Replay complete: ${data.total_trades_marked} trades marked | Win Rate: ${data.win_rate_pct}% | Net PnL: $${data.net_realized_pnl_usd}`);
+      await fetchTelemetry();
+    } catch (err) {
+      setCycleMsg(`Error running replay: ${err}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const triggerHalt = async () => {
     if (confirm("Emergency Circuit Breaker: Halt all QuantAI trading immediately?")) {
       await fetch("http://localhost:8000/api/v1/risk/halt?reason=NextJsDashboardOverride", { method: "POST" });
       await fetchTelemetry();
     }
   };
+
+  const winsCount = markedTrades.filter((t) => t.realized_pnl_usd > 0).length;
+  const lossesCount = markedTrades.filter((t) => t.realized_pnl_usd <= 0 && t.status !== "OPEN").length;
+  const totalPnL = markedTrades.reduce((acc, t) => acc + (t.realized_pnl_usd || 0), 0);
 
   return (
     <main className="min-h-screen bg-[#0a0e17] text-slate-100 p-6 max-w-7xl mx-auto space-y-6">
@@ -121,20 +167,34 @@ export default function Dashboard() {
 
       {/* Control Banner */}
       <div className="flex flex-wrap items-center justify-between bg-white/[0.03] border border-white/10 p-4 rounded-xl gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             disabled={loading}
             onClick={() => triggerCycle("BTC/USDT")}
             className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs px-4 py-2.5 rounded-lg transition"
           >
-            ⚡ Run BTC/USDT Cycle
+            ⚡ Run BTC Cycle
           </button>
           <button
             disabled={loading}
             onClick={() => triggerCycle("ETH/USDT")}
             className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-semibold text-xs px-4 py-2.5 rounded-lg transition"
           >
-            ⚡ Run ETH/USDT Cycle
+            ⚡ Run ETH Cycle
+          </button>
+          <button
+            disabled={loading}
+            onClick={() => triggerReplay("BTC/USDT")}
+            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs px-4 py-2.5 rounded-lg transition"
+          >
+            ⏩ Replay BTC (15m)
+          </button>
+          <button
+            disabled={loading}
+            onClick={() => triggerReplay("ETH/USDT")}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs px-4 py-2.5 rounded-lg transition"
+          >
+            ⏩ Replay ETH (15m)
           </button>
           <button
             onClick={fetchTelemetry}
@@ -180,6 +240,127 @@ export default function Dashboard() {
             {portfolio?.emergency_halt ? "HALTED" : "NOMINAL"}
           </h2>
           <p className="text-xs text-slate-400 mt-1">Fractional Kelly: 0.35x</p>
+        </div>
+      </div>
+
+      {/* SECTION: Marked Trades Ledger & Outcome Tracker */}
+      <div className="bg-white/[0.03] border border-white/10 p-5 rounded-xl space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <h3 className="font-semibold text-sm uppercase tracking-wide text-slate-200">
+              Forward Paper Trades Ledger & Outcome Tracker
+            </h3>
+            <p className="text-xs text-slate-400">
+              Synchronized with Excel • Record: {winsCount}W / {lossesCount}L • Net PnL:{" "}
+              <span className={totalPnL >= 0 ? "text-emerald-400 font-mono" : "text-red-400 font-mono"}>
+                ${totalPnL >= 0 ? `+${totalPnL.toFixed(2)}` : totalPnL.toFixed(2)}
+              </span>
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex bg-white/5 rounded-lg p-1 text-xs font-semibold">
+              <button
+                onClick={() => setSelectedPair("BTC")}
+                className={`px-3 py-1 rounded ${selectedPair === "BTC" ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}
+              >
+                BTC/USDT
+              </button>
+              <button
+                onClick={() => setSelectedPair("ETH")}
+                className={`px-3 py-1 rounded ${selectedPair === "ETH" ? "bg-purple-600 text-white" : "text-slate-400 hover:text-white"}`}
+              >
+                ETH/USDT
+              </button>
+            </div>
+            <a
+              href={`http://localhost:8000/api/v1/trades/download-excel?pair=${selectedPair}`}
+              className="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-semibold text-xs px-3.5 py-1.5 rounded-lg transition flex items-center gap-1.5"
+            >
+              📥 Download Excel (.xlsx)
+            </a>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="text-slate-400 border-b border-white/10 pb-2">
+              <tr>
+                <th className="py-2.5">Trade ID</th>
+                <th>Status</th>
+                <th>Pair</th>
+                <th>Side</th>
+                <th>Entry Price</th>
+                <th>Exit Price</th>
+                <th>Target TP</th>
+                <th>Stop Loss</th>
+                <th>Net PnL</th>
+                <th>Thesis Confirmed?</th>
+                <th>Strategy Rationale</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 font-mono">
+              {markedTrades.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="py-6 text-center text-slate-500 font-sans">
+                    No marked trades recorded yet. Run a replay or launch the live observer.
+                  </td>
+                </tr>
+              ) : (
+                markedTrades.map((t) => (
+                  <tr key={t.trade_id} className="hover:bg-white/[0.02]">
+                    <td className="py-3 font-bold text-slate-300">{t.trade_id}</td>
+                    <td>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.status === "CLOSED_WIN"
+                            ? "bg-emerald-500/20 text-emerald-400"
+                            : t.status === "CLOSED_LOSS"
+                            ? "bg-red-500/20 text-red-400"
+                            : "bg-yellow-500/20 text-yellow-400"
+                        }`}
+                      >
+                        {t.status}
+                      </span>
+                    </td>
+                    <td className="font-semibold text-slate-200">{t.pair}</td>
+                    <td>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          t.side === "BUY" ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+                        }`}
+                      >
+                        {t.side}
+                      </span>
+                    </td>
+                    <td>${t.entry_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td>${t.exit_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td className="text-emerald-400">${t.take_profit.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td className="text-red-400">${t.stop_loss.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td className={t.realized_pnl_usd >= 0 ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
+                      ${t.realized_pnl_usd >= 0 ? `+${t.realized_pnl_usd.toFixed(2)}` : t.realized_pnl_usd.toFixed(2)} ({t.realized_pnl_pct >= 0 ? `+${t.realized_pnl_pct.toFixed(2)}` : t.realized_pnl_pct.toFixed(2)}%)
+                    </td>
+                    <td>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          t.thesis_confirmed === "YES"
+                            ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                            : t.thesis_confirmed === "NO"
+                            ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                            : "bg-yellow-500/20 text-yellow-400"
+                        }`}
+                      >
+                        {t.thesis_confirmed || "PENDING"}
+                      </span>
+                    </td>
+                    <td className="font-sans text-[11px] text-slate-400 max-w-xs truncate" title={t.strategy_rationale}>
+                      {t.strategy_rationale}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

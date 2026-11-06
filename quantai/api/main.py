@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, FileResponse
 from pydantic import BaseModel
 
 from quantai.config.settings import get_config
@@ -184,6 +184,78 @@ def get_trades(limit: int = 50) -> List[Dict[str, Any]]:
             }
             for t in trades
         ]
+
+
+@app.get("/api/v1/trades/live-ledger")
+def get_live_ledger(pair: str = "BTC") -> List[Dict[str, Any]]:
+    """Returns the forward marked trades ledger from the latest live Excel tracking sheet."""
+    filename = "QuantAI_ETH_Forward_Trades.xlsx" if "ETH" in pair.upper() else "QuantAI_Live_Forward_Trades.xlsx"
+    excel_path = os.path.abspath(os.path.join("user_data", filename))
+    if not os.path.exists(excel_path):
+        return []
+
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
+    except Exception:
+        return []
+
+    if "Marked Trades Ledger" not in wb.sheetnames:
+        return []
+
+    ws = wb["Marked Trades Ledger"]
+    rows = list(ws.iter_rows(values_only=True))
+    if len(rows) <= 1:
+        return []
+
+    trades = []
+    for r in rows[1:]:
+        if not r or not r[0]:
+            continue
+        trades.append({
+            "trade_id": str(r[0]),
+            "status": str(r[1]),
+            "pair": str(r[2]),
+            "side": str(r[3]),
+            "entry_time": str(r[4]),
+            "exit_time": str(r[5]),
+            "entry_price": float(r[6] or 0.0),
+            "exit_price": float(r[7] or 0.0),
+            "take_profit": float(r[8] or 0.0),
+            "stop_loss": float(r[9] or 0.0),
+            "risk_reward": float(r[10] or 0.0),
+            "allocated_usd": float(r[11] or 0.0),
+            "realized_pnl_usd": float(r[12] or 0.0),
+            "realized_pnl_pct": float(r[13] or 0.0),
+            "exit_reason": str(r[14] or ""),
+            "thesis_confirmed": str(r[15] or ""),
+            "strategy_rationale": str(r[16] or ""),
+        })
+    return trades
+
+
+@app.get("/api/v1/trades/download-excel")
+def download_live_excel(pair: str = "BTC"):
+    """Downloads the generated forward paper trading Excel ledger."""
+    filename = "QuantAI_ETH_Forward_Trades.xlsx" if "ETH" in pair.upper() else "QuantAI_Live_Forward_Trades.xlsx"
+    file_path = os.path.abspath(os.path.join("user_data", filename))
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Excel tracking file not yet generated. Run a cycle or replay first.")
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.post("/api/v1/pipeline/replay")
+def trigger_replay(symbol: str = "BTC/USDT", candles: int = 120, timeframe: str = "15m") -> Dict[str, Any]:
+    """Triggers sequential forward replay against real Binance candles and updates the Excel ledger."""
+    from quantai.execution.live_observer import LiveMarketObserver
+    filename = "QuantAI_ETH_Forward_Trades.xlsx" if "ETH" in symbol.upper() else "QuantAI_Live_Forward_Trades.xlsx"
+    excel_path = os.path.join("user_data", filename)
+    observer = LiveMarketObserver(excel_path=excel_path)
+    return observer.run_forward_replay(pair=symbol, total_bars=candles, interval=timeframe)
 
 
 @app.post("/api/v1/risk/halt")
