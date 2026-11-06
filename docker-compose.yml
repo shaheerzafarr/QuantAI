@@ -50,6 +50,24 @@ services:
     volumes:
       - ./user_data:/app/user_data
 
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    container_name: quantai-freqtrade
+    restart: unless-stopped
+    volumes:
+      - ./user_data:/freqtrade/user_data
+      - ./quantai:/freqtrade/quantai
+    ports:
+      - "8080:8080"
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+    command: >
+      trade
+      --config /freqtrade/user_data/config.json
+      --strategy QuantAIStrategy
+      --strategy-path /freqtrade/user_data/strategies
+
   prometheus:
     image: prom/prometheus:latest
     container_name: quantai-prometheus

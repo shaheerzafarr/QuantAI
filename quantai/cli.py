@@ -104,6 +104,24 @@ def cmd_daemon(args):
     daemon_main()
 
 
+def cmd_freqtrade(args):
+    """Executes Freqtrade CLI with QuantAI strategy and configuration."""
+    from quantai.execution.freqtrade_runner import FreqtradeRunner
+    runner = FreqtradeRunner()
+
+    if args.ft_action == "trade":
+        print(f"Launching Freqtrade Spot Trade (Dry-run: {not args.live})...")
+        sys.exit(runner.run_trade(dry_run=not args.live, strategy=args.strategy))
+    elif args.ft_action == "backtest":
+        print(f"Running Freqtrade Backtest for strategy: {args.strategy}...")
+        sys.exit(runner.run_backtest(strategy=args.strategy, timeframe=args.timeframe, timerange=args.timerange))
+    elif args.ft_action == "download-data":
+        print("Downloading Freqtrade exchange market data...")
+        sys.exit(runner.run_download_data(days=args.days))
+    else:
+        print("Unknown Freqtrade action. Choose from: trade, backtest, download-data")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="QuantAI Autonomous Quantitative Intelligence & Trading Platform CLI"
@@ -132,6 +150,15 @@ def main():
     dl_p.add_argument("--timeframe", type=str, default="5m", help="Candle timeframe")
     dl_p.add_argument("--limit", type=int, default=300, help="Total candles to fetch")
 
+    # Freqtrade Subcommand
+    ft_p = subparsers.add_parser("freqtrade", help="Run Freqtrade with QuantAI extensions")
+    ft_p.add_argument("ft_action", choices=["trade", "backtest", "download-data"], help="Freqtrade operation")
+    ft_p.add_argument("--strategy", type=str, default="QuantAIStrategy", help="Strategy to run")
+    ft_p.add_argument("--timeframe", type=str, default="5m", help="Timeframe")
+    ft_p.add_argument("--timerange", type=str, default=None, help="Timerange for backtest")
+    ft_p.add_argument("--days", type=int, default=30, help="Days of data to download")
+    ft_p.add_argument("--live", action="store_true", help="Live execution flag (requires explicit approval)")
+
     args = parser.parse_args()
 
     if args.command == "status":
@@ -144,6 +171,8 @@ def main():
         cmd_benchmark(args)
     elif args.command == "download":
         cmd_download(args)
+    elif args.command == "freqtrade":
+        cmd_freqtrade(args)
     else:
         parser.print_help()
 
