@@ -32,6 +32,7 @@ from quantai.research.strategies import (
     WhaleFollowingStrategy,
     MACDDivergenceStrategy,
     CandlestickPatternStrategy,
+    RangeCompressionScalper,
 )
 
 logger = logging.getLogger("quantai.live_observer")
@@ -63,6 +64,7 @@ class LiveMarketObserver:
             WhaleFollowingStrategy(),
             MACDDivergenceStrategy(),
             CandlestickPatternStrategy(),
+            RangeCompressionScalper(),
         ]
         self.decision_engine = DecisionFusionEngine(min_confidence=0.55, min_expected_edge_bps=8.0)
         self.risk_guardian = IndependentRiskGuardian(initial_capital_usd=initial_capital)
@@ -491,7 +493,7 @@ class LiveMarketObserver:
         temp_path = self.excel_path + ".tmp"
         try:
             wb.save(temp_path)
-            shutil.move(temp_path, self.excel_path)
+            os.replace(temp_path, self.excel_path)
         except PermissionError:
             # If Excel has a file lock, save to timestamped file so execution never crashes
             alt_path = self.excel_path.replace(".xlsx", f"_{int(time.time())}.xlsx")

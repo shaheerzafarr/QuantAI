@@ -294,3 +294,94 @@ class CandlestickPatternStrategy(BaseStrategy):
         return StrategySignal(self.name, symbol, "HOLD", 0.0, "Standard candlestick structure", self.params)
 
 
+class RangeCompressionScalper(BaseStrategy):
+    """Exploits price oscillation within tight compression ranges using Stochastic RSI & 1.5-sigma Bollinger Bands."""
+
+    def __init__(self, stoch_oversold: float = 25.0, stoch_overbought: float = 75.0, min_rr: float = 2.0):
+        super().__init__(
+            name="RangeCompressionScalper",
+            params={
+                "stoch_oversold": float(stoch_oversold),
+                "stoch_overbought": float(stoch_overbought),
+                "min_rr": float(min_rr),
+            },
+        )
+
+    def generate_signal(self, df: pd.DataFrame, symbol: str = "BTC/USDT") -> StrategySignal:
+        if len(df) < 25:
+            return StrategySignal(self.name, symbol, "HOLD", 0.0, "Insufficient bars", self.params)
+
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        close = float(curr["close"])
+        low = float(curr["low"])
+        high = float(curr["high"])
+
+        bb_mid = float(curr.get("bb_mid", close))
+        bb_upper_1_5 = float(curr.get("bb_upper_1_5", close * 1.01))
+        bb_lower_1_5 = float(curr.get("bb_lower_1_5", close * 0.99))
+        stoch_k = float(curr.get("stoch_rsi_k", 50.0))
+        stoch_d = float(curr.get("stoch_rsi_d", 50.0))
+        prev_k = float(prev.get("stoch_rsi_k", 50.0))
+        rsi_14 = float(curr.get("rsi_14", 50.0))
+
+        if bb_upper_1_5 <= bb_lower_1_5:
+            return StrategySignal(self.name, symbol, "HOLD", 0.0, "Invalid band width", self.params)
+
+        # 1. Bullish Mean-Reversion at Support (BUY)
+        near_lower_band = close <= bb_lower_1_5 * 1.0015 or low <= bb_lower_1_5
+        stoch_oversold_signal = stoch_k <= self.params["stoch_oversold"] or (stoch_k <= 35.0 and stoch_k > prev_k)
+
+        if near_lower_band and (stoch_oversold_signal or rsi_14 < 38.0):
+            dist_to_mid = max(0.0, (bb_mid - close) / (close + 1e-10))
+            tp_pct = round(max(0.006, min(0.022, dist_to_mid if dist_to_mid > 0.004 else 0.008)), 4)
+            sl_pct = round(tp_pct / self.params["min_rr"], 4)
+
+            sig_params = {
+                **self.params,
+                "tp_pct": tp_pct,
+                "sl_pct": sl_pct,
+                "stoch_k": round(stoch_k, 2),
+                "stoch_d": round(stoch_d, 2),
+                "target_midline": round(bb_mid, 2),
+            }
+            return StrategySignal(
+                self.name,
+                symbol,
+                "BUY",
+                0.85,
+                f"Range Compression Bounce: Price (${close:.2f}) at lower 1.5-sigma band (${bb_lower_1_5:.2f}) with oversold StochRSI ({stoch_k:.1f})",
+                sig_params,
+            )
+
+        # 2. Bearish Mean-Reversion at Resistance (SELL)
+        near_upper_band = close >= bb_upper_1_5 * 0.9985 or high >= bb_upper_1_5
+        stoch_overbought_signal = stoch_k >= self.params["stoch_overbought"] or (stoch_k >= 65.0 and stoch_k < prev_k)
+
+        if near_upper_band and (stoch_overbought_signal or rsi_14 > 62.0):
+            dist_to_mid = max(0.0, (close - bb_mid) / (close + 1e-10))
+            tp_pct = round(max(0.006, min(0.022, dist_to_mid if dist_to_mid > 0.004 else 0.008)), 4)
+            sl_pct = round(tp_pct / self.params["min_rr"], 4)
+
+            sig_params = {
+                **self.params,
+                "tp_pct": tp_pct,
+                "sl_pct": sl_pct,
+                "stoch_k": round(stoch_k, 2),
+                "stoch_d": round(stoch_d, 2),
+                "target_midline": round(bb_mid, 2),
+            }
+            return StrategySignal(
+                self.name,
+                symbol,
+                "SELL",
+                0.85,
+                f"Range Compression Rejection: Price (${close:.2f}) at upper 1.5-sigma band (${bb_upper_1_5:.2f}) with overbought StochRSI ({stoch_k:.1f})",
+                sig_params,
+            )
+
+        return StrategySignal(self.name, symbol, "HOLD", 0.0, "Oscillating within inner range bounds", self.params)
+
+
+

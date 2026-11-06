@@ -77,3 +77,52 @@ def test_multi_timeframe_zero_lookahead(sample_ohlcv):
     assert "1h_ema_20" in merged.columns
     # Verify backward alignment preserves exact 5m row count
     assert len(merged) == len(sample_ohlcv)
+
+
+def test_stoch_rsi_bounds(sample_ohlcv):
+    k, d = TechnicalIndicators.stoch_rsi(sample_ohlcv["close"])
+    valid_k = k.dropna()
+    valid_d = d.dropna()
+    assert len(valid_k) > 0
+    assert (valid_k >= 0.0).all() and (valid_k <= 100.0).all()
+    assert (valid_d >= 0.0).all() and (valid_d <= 100.0).all()
+
+
+def test_range_compression_scalper(sample_ohlcv):
+    from quantai.research.strategies import RangeCompressionScalper
+
+    engine = TechnicalFeatureEngine()
+    feat_df = engine.compute_features(sample_ohlcv)
+
+    scalper = RangeCompressionScalper()
+    sig = scalper.generate_signal(feat_df, symbol="BTC/USDT")
+    assert sig.action in ["BUY", "SELL", "HOLD"]
+    assert sig.symbol == "BTC/USDT"
+    assert "min_rr" in sig.params
+
+    # Force oversold bounce condition at lower 1.5-sigma band
+    forced_df = feat_df.copy()
+    lower_band = forced_df["bb_lower_1_5"].iloc[-1]
+    forced_df.loc[forced_df.index[-1], "close"] = lower_band * 0.999
+    forced_df.loc[forced_df.index[-1], "low"] = lower_band * 0.998
+    forced_df.loc[forced_df.index[-1], "stoch_rsi_k"] = 15.0
+    forced_df.loc[forced_df.index[-1], "stoch_rsi_d"] = 18.0
+
+    bounce_sig = scalper.generate_signal(forced_df, symbol="BTC/USDT")
+    assert bounce_sig.action == "BUY"
+    assert bounce_sig.strength >= 0.80
+    assert "tp_pct" in bounce_sig.params
+    assert "sl_pct" in bounce_sig.params
+    assert bounce_sig.params["tp_pct"] / bounce_sig.params["sl_pct"] >= 1.9
+
+    # Force overbought rejection condition at upper 1.5-sigma band
+    upper_band = forced_df["bb_upper_1_5"].iloc[-1]
+    forced_df.loc[forced_df.index[-1], "close"] = upper_band * 1.001
+    forced_df.loc[forced_df.index[-1], "high"] = upper_band * 1.002
+    forced_df.loc[forced_df.index[-1], "stoch_rsi_k"] = 85.0
+    forced_df.loc[forced_df.index[-1], "stoch_rsi_d"] = 82.0
+
+    reject_sig = scalper.generate_signal(forced_df, symbol="BTC/USDT")
+    assert reject_sig.action == "SELL"
+    assert reject_sig.strength >= 0.80
+

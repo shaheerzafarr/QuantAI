@@ -103,7 +103,11 @@ class IndependentRiskGuardian:
         return round(min(target_usd, self.available_capital), 2)
 
     def evaluate_decision(
-        self, decision: TradeDecision, current_price: float
+        self,
+        decision: TradeDecision,
+        current_price: float,
+        custom_sl_pct: Optional[float] = None,
+        custom_tp_pct: Optional[float] = None,
     ) -> RiskVerdict:
         """Evaluates trade proposal against strict risk mandates with veto authority."""
         # 1. Check Emergency Circuit Breaker
@@ -133,8 +137,16 @@ class IndependentRiskGuardian:
             )
 
         # 3. Calculate Stop Loss & Take Profit
-        sl_pct = self.risk_cfg.stop_loss_pct
-        tp_pct = self.risk_cfg.take_profit_pct
+        cand_sl = custom_sl_pct if custom_sl_pct is not None else getattr(decision, "custom_sl_pct", None)
+        cand_tp = custom_tp_pct if custom_tp_pct is not None else getattr(decision, "custom_tp_pct", None)
+
+        if cand_sl is not None and cand_tp is not None and (cand_tp / cand_sl) >= self.risk_cfg.min_risk_reward_ratio:
+            sl_pct = cand_sl
+            tp_pct = cand_tp
+        else:
+            sl_pct = self.risk_cfg.stop_loss_pct
+            tp_pct = self.risk_cfg.take_profit_pct
+
         rr_ratio = tp_pct / sl_pct
 
         if rr_ratio < self.risk_cfg.min_risk_reward_ratio:

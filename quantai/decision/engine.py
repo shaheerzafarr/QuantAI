@@ -25,6 +25,8 @@ class TradeDecision:
     model_version: str
     risk_status: str  # PENDING_RISK_CHECK, APPROVED, VETOED
     explanation: str
+    custom_sl_pct: Optional[float] = None
+    custom_tp_pct: Optional[float] = None
 
 
 class DecisionFusionEngine:
@@ -76,6 +78,8 @@ class DecisionFusionEngine:
         # 2. Quantitative Strategy Signals
         p_strat = 0.50
         active_strategies: List[str] = []
+        custom_tp: Optional[float] = None
+        custom_sl: Optional[float] = None
         if strategy_signals:
             strat_weighted_prob = 0.0
             total_strat_weight = 0.0
@@ -86,12 +90,18 @@ class DecisionFusionEngine:
                     active_strategies.append(s.strategy_name)
                     strat_weighted_prob += strat_p * (1.0 + s.strength)
                     total_strat_weight += (1.0 + s.strength)
+                    if "tp_pct" in s.params and "sl_pct" in s.params:
+                        custom_tp = s.params["tp_pct"]
+                        custom_sl = s.params["sl_pct"]
                 elif s.action == "SELL" and s.strength > 0:
                     strat_p = 0.50 - (s.strength * 0.45)
                     contradictory.append(f"[{s.strategy_name}] {s.rationale} (Strength: {s.strength:.0%})")
                     active_strategies.append(s.strategy_name)
                     strat_weighted_prob += strat_p * (1.0 + s.strength)
                     total_strat_weight += (1.0 + s.strength)
+                    if "tp_pct" in s.params and "sl_pct" in s.params:
+                        custom_tp = s.params["tp_pct"]
+                        custom_sl = s.params["sl_pct"]
                 else:
                     strat_weighted_prob += 0.50 * 0.5
                     total_strat_weight += 0.5
@@ -164,13 +174,15 @@ class DecisionFusionEngine:
             action = "HOLD"
             explanation = "Complete signal equilibrium or lack of market conviction. Capital preservation active."
 
+        risk_bps = round(total_cost_bps + (custom_sl * 10000.0 if custom_sl is not None else 150.0), 2)
+
         decision = TradeDecision(
             pair=symbol,
             timestamp=datetime.now(timezone.utc).isoformat(),
             action=action,
             confidence=round(confidence, 3),
             expected_return_bps=round(net_edge_bps, 2),
-            expected_risk_bps=round(total_cost_bps + 150.0, 2),  # 150 bps stop loss
+            expected_risk_bps=risk_bps,
             estimated_cost_bps=round(total_cost_bps, 2),
             supporting_evidence=supporting[:6],
             contradictory_evidence=contradictory[:6],
@@ -178,6 +190,8 @@ class DecisionFusionEngine:
             model_version=ml_ver,
             risk_status="PENDING_RISK_CHECK",
             explanation=explanation,
+            custom_sl_pct=custom_sl if action in ["BUY", "SELL"] else None,
+            custom_tp_pct=custom_tp if action in ["BUY", "SELL"] else None,
         )
 
         # Log decision to database

@@ -54,12 +54,19 @@ class TechnicalFeatureEngine:
         # RSI
         df["rsi_14"] = self.ti.rsi(df["close"], 14)
 
+        # Stochastic RSI
+        df["stoch_rsi_k"], df["stoch_rsi_d"] = self.ti.stoch_rsi(df["close"])
+
         # Bollinger Bands
         bb_upper, bb_mid, bb_lower, bb_width = self.ti.bollinger_bands(df["close"])
         df["bb_upper"] = bb_upper
         df["bb_mid"] = bb_mid
         df["bb_lower"] = bb_lower
         df["bb_width"] = bb_width
+
+        # 1.5-Sigma Inner Range Bands
+        df["bb_upper_1_5"] = df["bb_mid"] + 1.5 * (bb_upper - bb_mid) / 2.0
+        df["bb_lower_1_5"] = df["bb_mid"] - 1.5 * (bb_mid - bb_lower) / 2.0
 
         # ATR
         df["atr_14"] = self.ti.atr(df["high"], df["low"], df["close"], 14)

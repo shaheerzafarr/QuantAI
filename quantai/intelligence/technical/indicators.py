@@ -45,6 +45,23 @@ class TechnicalIndicators:
         return rsi
 
     @staticmethod
+    def stoch_rsi(
+        close: pd.Series,
+        rsi_period: int = 14,
+        stoch_period: int = 14,
+        k_period: int = 3,
+        d_period: int = 3,
+    ) -> Tuple[pd.Series, pd.Series]:
+        """Calculates Stochastic RSI (%K and %D lines) bounded between 0 and 100."""
+        rsi_vals = TechnicalIndicators.rsi(close, period=rsi_period)
+        min_rsi = rsi_vals.rolling(window=stoch_period).min()
+        max_rsi = rsi_vals.rolling(window=stoch_period).max()
+        stoch = (rsi_vals - min_rsi) / (max_rsi - min_rsi + 1e-10) * 100.0
+        k = stoch.rolling(window=k_period).mean()
+        d = k.rolling(window=d_period).mean()
+        return k, d
+
+    @staticmethod
     def bollinger_bands(
         close: pd.Series, period: int = 20, num_std: float = 2.0
     ) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:

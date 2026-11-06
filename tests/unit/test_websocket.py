@@ -82,3 +82,4 @@ def test_ticker_stream_message_handling():
     assert len(ticks) == 1
     assert ticks[0] == ("ETH/USDT", 2245.50)
     assert client.latest_prices["ETH/USDT"] == 2245.50
+
