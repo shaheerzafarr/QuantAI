@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0a0e17;
+  --bg-card: rgba(16, 24, 39, 0.75);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: #f8fafc;
+  min-height: 100vh;
+}

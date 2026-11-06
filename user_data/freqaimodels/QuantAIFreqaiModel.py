@@ -78,3 +78,4 @@ class QuantAIFreqaiModel(IFreqaiModel):
         )
         do_predict = np.ones(n, dtype=int)
         return pred_df, do_predict
+

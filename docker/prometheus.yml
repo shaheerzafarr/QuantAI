@@ -7,3 +7,4 @@ scrape_configs:
     static_configs:
       - targets: ['quantai-api:8000']
     metrics_path: '/metrics'
+

@@ -94,3 +94,4 @@ class FreqtradeRunner:
             env["PYTHONPATH"] = f"freqtrade;{env.get('PYTHONPATH', '')}"
             logger.info(f"Executing local Freqtrade: {' '.join(local_cmd)}")
             return subprocess.call(local_cmd, env=env)
+

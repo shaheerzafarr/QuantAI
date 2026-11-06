@@ -32,8 +32,9 @@ ENV/
 htmlcov/
 
 # Local databases & logs
-user_data/quantai.db
+user_data/*.db*
 user_data/logs/
+user_data/*.xlsx
 *.log
 
 # Node & Next.js

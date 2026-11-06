@@ -91,6 +91,26 @@ def cmd_download(args):
     print(f"Downloaded and saved {count} candles for {args.symbol}.")
 
 
+def cmd_paper_audit(args):
+    """Executes full paper trading simulation and generates detailed Excel audit workbook."""
+    from quantai.research.paper_auditor import PaperTradingAuditor
+
+    print(f"\n🚀 Launching QuantAI Paper Trading Audit on {args.symbol} ({args.candles} candles)...")
+    auditor = PaperTradingAuditor(initial_capital=args.capital)
+    sim_data = auditor.run_simulation(symbol=args.symbol, timeframe=args.timeframe, candles_count=args.candles)
+
+    output_path = args.output or "user_data/QuantAI_Paper_Trading_Audit.xlsx"
+    saved_file = auditor.generate_excel_workbook(sim_data, output_filepath=output_path)
+
+    print("\n" + "=" * 70)
+    print(f" ✅ PAPER TRADING AUDIT COMPLETED SUCCESSFULLY!")
+    print(f" 📊 Excel Workbook Generated: {saved_file}")
+    print(f" 📈 Evaluated Bars         : {sim_data['candles_evaluated']}")
+    print(f" 📋 Total Decisions Logged : {len(sim_data['decisions_log'])}")
+    print(f" 💰 Total Executed Trades  : {len(sim_data['trades_log'])}")
+    print("=" * 70 + "\n")
+
+
 def cmd_api(args):
     """Starts the FastAPI server and embedded dashboard."""
     import uvicorn
@@ -150,6 +170,14 @@ def main():
     dl_p.add_argument("--timeframe", type=str, default="5m", help="Candle timeframe")
     dl_p.add_argument("--limit", type=int, default=300, help="Total candles to fetch")
 
+    # Paper Audit & Excel Generation
+    audit_p = subparsers.add_parser("paper-audit", help="Run paper trading simulation and export validated Excel sheet")
+    audit_p.add_argument("--symbol", type=str, default="BTC/USDT", help="Trading pair (default: BTC/USDT)")
+    audit_p.add_argument("--timeframe", type=str, default="5m", help="Timeframe (default: 5m)")
+    audit_p.add_argument("--candles", type=int, default=120, help="Number of candles to simulate (default: 120)")
+    audit_p.add_argument("--capital", type=float, default=100000.0, help="Initial capital in USD")
+    audit_p.add_argument("--output", type=str, default="user_data/QuantAI_Paper_Trading_Audit.xlsx", help="Output Excel file path")
+
     # Freqtrade Subcommand
     ft_p = subparsers.add_parser("freqtrade", help="Run Freqtrade with QuantAI extensions")
     ft_p.add_argument("ft_action", choices=["trade", "backtest", "download-data"], help="Freqtrade operation")
@@ -171,6 +199,8 @@ def main():
         cmd_benchmark(args)
     elif args.command == "download":
         cmd_download(args)
+    elif args.command == "paper-audit":
+        cmd_paper_audit(args)
     elif args.command == "freqtrade":
         cmd_freqtrade(args)
     else:
