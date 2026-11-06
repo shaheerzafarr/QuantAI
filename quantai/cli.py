@@ -111,6 +111,39 @@ def cmd_paper_audit(args):
     print("=" * 70 + "\n")
 
 
+def cmd_observe(args):
+    """Continuously observes market, marks paper trades, tracks outcomes, and syncs to Excel."""
+    import asyncio
+    from quantai.execution.live_observer import LiveMarketObserver
+
+    print("\n" + "=" * 75)
+    print(" 📡 QUANTAI CONTINUOUS LIVE OBSERVER & OUTCOME TRACKER")
+    print("=" * 75)
+    print(f" Target Excel File  : {args.excel}")
+    print(f" Scan Interval      : {args.interval}s")
+    print(f" Monitoring Pairs   : BTC/USDT, ETH/USDT")
+    print(f" Mode               : Real-Time Scanning + Outcome Ledger Synchronization")
+    print(" Press Ctrl+C at any time to halt.")
+    print("=" * 75 + "\n")
+
+    observer = LiveMarketObserver(
+        excel_path=args.excel,
+        poll_interval_seconds=args.interval,
+        initial_capital=args.capital,
+    )
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(observer.run_continuous_observation(cycles=args.cycles))
+    except KeyboardInterrupt:
+        print("\nObserver stopped by user.")
+    finally:
+        observer.stop()
+        loop.close()
+        print(f"Final Excel ledger updated and saved to: {args.excel}")
+
+
 def cmd_api(args):
     """Starts the FastAPI server and embedded dashboard."""
     import uvicorn
@@ -178,6 +211,13 @@ def main():
     audit_p.add_argument("--capital", type=float, default=100000.0, help="Initial capital in USD")
     audit_p.add_argument("--output", type=str, default="user_data/QuantAI_Paper_Trading_Audit.xlsx", help="Output Excel file path")
 
+    # Continuous Live Observer & Excel Sync
+    obs_p = subparsers.add_parser("observe", help="Continuously scan market, mark paper trades, track outcomes, and update live Excel")
+    obs_p.add_argument("--interval", type=float, default=10.0, help="Polling interval in seconds (default: 10)")
+    obs_p.add_argument("--cycles", type=int, default=None, help="Total cycles to run (default: infinite)")
+    obs_p.add_argument("--capital", type=float, default=100000.0, help="Initial portfolio capital in USD")
+    obs_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
+
     # Freqtrade Subcommand
     ft_p = subparsers.add_parser("freqtrade", help="Run Freqtrade with QuantAI extensions")
     ft_p.add_argument("ft_action", choices=["trade", "backtest", "download-data"], help="Freqtrade operation")
@@ -201,6 +241,8 @@ def main():
         cmd_download(args)
     elif args.command == "paper-audit":
         cmd_paper_audit(args)
+    elif args.command == "observe":
+        cmd_observe(args)
     elif args.command == "freqtrade":
         cmd_freqtrade(args)
     else:
