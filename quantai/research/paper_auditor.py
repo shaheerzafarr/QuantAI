@@ -516,3 +516,4 @@ class PaperTradingAuditor:
         wb.save(output_filepath)
         logger.info(f"Excel Workbook successfully generated and saved to: {output_filepath}")
         return output_filepath
+

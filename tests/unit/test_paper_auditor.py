@@ -31,3 +31,4 @@ def test_paper_auditor_simulation_and_excel(tmp_path):
     header = [c.value for c in ws_dec[1]]
     assert "Timestamp" in header
     assert "Validation Integrity" in header
+
