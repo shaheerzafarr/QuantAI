@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: quantai-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-quantai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantai_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-quantai_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantai -d quantai_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: quantai-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  quantai-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: quantai-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://quantai:quantai_secret@postgres:5432/quantai_db
+      REDIS_URL: redis://redis:6379/0
+      EXECUTION_MODE: dry_run
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./user_data:/app/user_data
+
+volumes:
+  postgres_data:
+  redis_data:
