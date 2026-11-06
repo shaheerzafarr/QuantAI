@@ -34,3 +34,4 @@ def test_stress_simulation_run(tmp_path):
     assert "Live Performance Summary" in wb.sheetnames
     assert "Marked Trades Ledger" in wb.sheetnames
     assert "Real-Time Decisions Log" in wb.sheetnames
+

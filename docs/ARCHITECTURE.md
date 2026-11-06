@@ -172,3 +172,4 @@ Where:
 - **Daily Drawdown Circuit Breaker:** Any daily loss exceeding 2% triggers an immediate trading pause.
 - **Max Total Drawdown Emergency Halt:** Cumulative portfolio drawdown reaching 6% triggers a permanent halt and requires manual operator review.
 - **Risk/Reward Threshold:** Minimum 1:1.8 reward-to-risk ratio required for every trade proposal.
+

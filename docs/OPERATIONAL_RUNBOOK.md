@@ -105,3 +105,4 @@ Live execution must never be enabled until all of the following conditions are m
 - [ ] **Exchange API Key Safety:** API keys configured with **Spot Trading only**; withdrawal permissions must remain permanently disabled.
 - [ ] **IP Whitelisting:** API keys restricted to dedicated server IP addresses on Binance.
 - [ ] **Independent Risk Veto:** Verified that the risk guardian rejected invalid trade proposals under extreme simulated market events.
+

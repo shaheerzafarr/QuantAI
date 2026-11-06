@@ -521,6 +521,77 @@ class LiveMarketObserver:
 
             await asyncio.sleep(self.interval)
 
+    def run_forward_replay(
+        self,
+        pair: str = "BTC/USDT",
+        total_bars: int = 150,
+        interval: str = "5m",
+    ) -> Dict[str, Any]:
+        """Replays historical market bars sequentially to verify strategy discovery, trade marking, and outcome tracking."""
+        logger.info(f"Initiating forward replay on {pair} for {total_bars} bars ({interval})...")
+        candles = self.client.fetch_klines(symbol=pair, interval=interval, limit=total_bars)
+        full_df = self.feature_engine.dataframe_from_candles(candles)
+
+        if len(full_df) < 40:
+            raise ValueError(f"Insufficient candles fetched for replay: {len(full_df)}")
+
+        logger.info(f"Loaded {len(full_df)} bars. Stepping sequentially from bar 35...")
+        for i in range(35, len(full_df)):
+            sub_df = full_df.iloc[: i + 1]
+            self.scan_and_analyze(pair=pair, custom_df=sub_df)
+
+        # Close any remaining open trades at the final bar's price for comprehensive auditing
+        last_bar = full_df.iloc[-1]
+        final_price = float(last_bar["close"])
+        if pair in self.active_trades:
+            trade = self.active_trades[pair]
+            exit_price = final_price
+            fee_exit = trade["allocated_usd"] * 0.00075
+            total_fees = trade["fee_entry_usd"] + fee_exit
+            gross_pnl = (
+                (exit_price - trade["entry_price"]) * trade["amount"]
+                if trade["side"] == "BUY"
+                else (trade["entry_price"] - exit_price) * trade["amount"]
+            )
+            net_pnl = gross_pnl - total_fees
+            net_pnl_pct = (net_pnl / trade["allocated_usd"]) * 100.0
+
+            trade["status"] = "CLOSED_WIN" if net_pnl > 0 else "CLOSED_LOSS"
+            trade["exit_price"] = round(exit_price, 2)
+            trade["exit_time"] = str(last_bar["timestamp"])
+            trade["exit_reason"] = "END_OF_OBSERVATION_WINDOW"
+            trade["realized_pnl_usd"] = round(net_pnl, 2)
+            trade["realized_pnl_pct"] = round(net_pnl_pct, 2)
+            trade["thesis_confirmed"] = "YES" if net_pnl > 0 else "NO"
+            self.completed_trades.append(trade)
+            del self.active_trades[pair]
+            self.sync_to_excel()
+
+        wins = [t for t in self.completed_trades if t.get("realized_pnl_usd", 0) > 0]
+        losses = [t for t in self.completed_trades if t.get("realized_pnl_usd", 0) <= 0]
+        total_pnl = sum(t.get("realized_pnl_usd", 0) for t in self.completed_trades)
+        win_rate = (len(wins) / len(self.completed_trades) * 100.0) if self.completed_trades else 0.0
+        profit_factor = (
+            sum(t["realized_pnl_usd"] for t in wins) / abs(sum(t["realized_pnl_usd"] for t in losses))
+            if losses and sum(t["realized_pnl_usd"] for t in losses) != 0
+            else (999.0 if wins else 0.0)
+        )
+
+        summary = {
+            "pair": pair,
+            "total_bars_replayed": len(full_df) - 35,
+            "total_trades_marked": len(self.completed_trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate_pct": round(win_rate, 1),
+            "profit_factor": round(profit_factor, 2) if profit_factor != 999.0 else "N/A",
+            "net_realized_pnl_usd": round(total_pnl, 2),
+            "final_portfolio_usd": round(self.risk_guardian.total_capital + total_pnl, 2),
+            "excel_report": self.excel_path,
+        }
+        logger.info(f"Forward Replay Audit Complete: {summary}")
+        return summary
+
     def stop(self):
         self.running = False
 

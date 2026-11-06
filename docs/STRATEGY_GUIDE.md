@@ -76,3 +76,4 @@ Where:
 - $\text{SR}^*$: Expected maximum Sharpe ratio achievable purely by chance across $N$ trial attempts:
   $$\text{SR}^* \approx \frac{(1 - \gamma) Z^{-1}\left(1 - \frac{1}{N}\right) + \gamma Z^{-1}\left(1 - \frac{1}{N e}\right)}{\sqrt{T}}$$
 - Any strategy with a negative DSR is automatically disqualified from promotion, regardless of its nominal historical returns.
+
