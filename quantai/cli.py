@@ -144,6 +144,41 @@ def cmd_observe(args):
         print(f"Final Excel ledger updated and saved to: {args.excel}")
 
 
+def cmd_replay(args):
+    """Executes sequential forward replay on real Binance candles, marking trades, tracking TP/SL, and syncing Excel."""
+    from quantai.execution.live_observer import LiveMarketObserver
+
+    print("\n" + "=" * 75)
+    print(" ⏩ QUANTAI STRATEGY DISCOVERY & OUTCOME REPLAY AUDITOR")
+    print("=" * 75)
+    print(f" Target Pair        : {args.pair}")
+    print(f" Candles to Replay  : {args.candles} ({args.timeframe})")
+    print(f" Target Excel File  : {args.excel}")
+    print(f" Initial Portfolio  : ${args.capital:,.2f}")
+    print("=" * 75 + "\n")
+
+    observer = LiveMarketObserver(
+        excel_path=args.excel,
+        initial_capital=args.capital,
+    )
+    summary = observer.run_forward_replay(
+        pair=args.pair,
+        total_bars=args.candles,
+        interval=args.timeframe,
+    )
+
+    print("\n" + "=" * 75)
+    print(" ✅ FORWARD REPLAY AUDIT COMPLETE!")
+    print(f" 📊 Excel Report Generated : {summary['excel_report']}")
+    print(f" 📈 Replayed Bars          : {summary['total_bars_replayed']}")
+    print(f" 🎯 Total Marked Trades    : {summary['total_trades_marked']}")
+    print(f" 🏆 Win / Loss Record      : {summary['wins']}W / {summary['losses']}L ({summary['win_rate_pct']}%)")
+    print(f" ⚖️ Profit Factor          : {summary['profit_factor']}")
+    print(f" 💰 Net Realized PnL       : ${summary['net_realized_pnl_usd']:+,.2f}")
+    print(f" 💼 Final Balance          : ${summary['final_portfolio_usd']:,.2f}")
+    print("=" * 75 + "\n")
+
+
 def cmd_api(args):
     """Starts the FastAPI server and embedded dashboard."""
     import uvicorn
@@ -218,6 +253,14 @@ def main():
     obs_p.add_argument("--capital", type=float, default=100000.0, help="Initial portfolio capital in USD")
     obs_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
 
+    # Strategy Replay & Outcome Verification
+    rep_p = subparsers.add_parser("replay", help="Replay Binance candles sequentially to verify strategy discovery and outcome tracking")
+    rep_p.add_argument("--pair", type=str, default="BTC/USDT", help="Trading pair (default: BTC/USDT)")
+    rep_p.add_argument("--timeframe", type=str, default="5m", help="Candle timeframe (default: 5m)")
+    rep_p.add_argument("--candles", type=int, default=120, help="Number of candles to replay (default: 120)")
+    rep_p.add_argument("--capital", type=float, default=100000.0, help="Initial portfolio capital in USD")
+    rep_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
+
     # Freqtrade Subcommand
     ft_p = subparsers.add_parser("freqtrade", help="Run Freqtrade with QuantAI extensions")
     ft_p.add_argument("ft_action", choices=["trade", "backtest", "download-data"], help="Freqtrade operation")
@@ -243,6 +286,8 @@ def main():
         cmd_paper_audit(args)
     elif args.command == "observe":
         cmd_observe(args)
+    elif args.command == "replay":
+        cmd_replay(args)
     elif args.command == "freqtrade":
         cmd_freqtrade(args)
     else:

@@ -60,3 +60,21 @@ def test_open_trade_tp_sl_resolution(tmp_path):
     assert t["realized_pnl_usd"] > 0
     assert "BTC/USDT" not in observer.active_trades
     assert len(observer.completed_trades) == 1
+
+
+def test_forward_replay_execution(tmp_path):
+    excel_path = str(tmp_path / "test_forward_replay.xlsx")
+    observer = LiveMarketObserver(excel_path=excel_path)
+
+    # Run replay across 60 bars
+    summary = observer.run_forward_replay(pair="BTC/USDT", total_bars=60)
+    assert os.path.exists(excel_path)
+    assert summary["total_bars_replayed"] == 25
+    assert "excel_report" in summary
+    assert "win_rate_pct" in summary
+
+    wb = openpyxl.load_workbook(excel_path)
+    assert "Live Performance Summary" in wb.sheetnames
+    assert "Real-Time Decisions Log" in wb.sheetnames
+    ws_dec = wb["Real-Time Decisions Log"]
+    assert ws_dec.max_row > 10
