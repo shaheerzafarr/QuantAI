@@ -198,3 +198,99 @@ class BreakoutMomentumStrategy(BaseStrategy):
 
         return StrategySignal(self.name, symbol, "HOLD", 0.0, "Consolidation within range", self.params)
 
+
+class MACDDivergenceStrategy(BaseStrategy):
+    """Detects classical price vs momentum divergence on MACD histogram."""
+
+    def __init__(self, lookback_bars: int = 12):
+        super().__init__(
+            name="MACD_Divergence",
+            params={"lookback_bars": float(lookback_bars)},
+        )
+
+    def generate_signal(self, df: pd.DataFrame, symbol: str = "BTC/USDT") -> StrategySignal:
+        n = int(self.params["lookback_bars"])
+        if len(df) < n + 15:
+            return StrategySignal(self.name, symbol, "HOLD", 0.0, "Insufficient bars for divergence analysis", self.params)
+
+        row = df.iloc[-1]
+        prev_row = df.iloc[-n]
+
+        close = float(row["close"])
+        prev_close = float(prev_row["close"])
+
+        macd_hist = float(row.get("macd_hist", 0.0))
+        prev_macd_hist = float(prev_row.get("macd_hist", 0.0))
+
+        # Bullish Divergence: Lower price low + Higher MACD momentum low
+        if close < prev_close and macd_hist > prev_macd_hist and macd_hist > float(df.iloc[-2].get("macd_hist", 0.0)):
+            return StrategySignal(
+                self.name,
+                symbol,
+                "BUY",
+                0.80,
+                f"Bullish MACD Divergence: Price Lower Low (${close:.2f} < ${prev_close:.2f}) vs MACD Hist Higher Low",
+                self.params,
+            )
+        # Bearish Divergence: Higher price high + Lower MACD momentum high
+        elif close > prev_close and macd_hist < prev_macd_hist and macd_hist < float(df.iloc[-2].get("macd_hist", 0.0)):
+            return StrategySignal(
+                self.name,
+                symbol,
+                "SELL",
+                0.80,
+                f"Bearish MACD Divergence: Price Higher High (${close:.2f} > ${prev_close:.2f}) vs MACD Hist Lower High",
+                self.params,
+            )
+
+        return StrategySignal(self.name, symbol, "HOLD", 0.0, "No divergence detected", self.params)
+
+
+class CandlestickPatternStrategy(BaseStrategy):
+    """Identifies high-probability reversal candlestick structures (Engulfing, Hammer Pin Bars)."""
+
+    def __init__(self):
+        super().__init__(name="CandlestickReversal_Structure")
+
+    def generate_signal(self, df: pd.DataFrame, symbol: str = "BTC/USDT") -> StrategySignal:
+        if len(df) < 5:
+            return StrategySignal(self.name, symbol, "HOLD", 0.0, "Insufficient bars", self.params)
+
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        c_open = float(curr["open"])
+        c_high = float(curr["high"])
+        c_low = float(curr["low"])
+        c_close = float(curr["close"])
+
+        p_open = float(prev["open"])
+        p_close = float(prev["close"])
+
+        c_body = abs(c_close - c_open)
+        p_body = abs(p_close - p_open)
+        total_range = c_high - c_low + 1e-10
+        lower_wick = min(c_open, c_close) - c_low
+        upper_wick = c_high - max(c_open, c_close)
+
+        # 1. Bullish Engulfing
+        if p_close < p_open and c_close > c_open and c_close >= p_open and c_open <= p_close and c_body > p_body * 1.2:
+            return StrategySignal(
+                self.name, symbol, "BUY", 0.80, "Bullish Engulfing reversal bar confirmed at support", self.params
+            )
+
+        # 2. Bearish Engulfing
+        elif p_close > p_open and c_close < c_open and c_close <= p_open and c_open >= p_close and c_body > p_body * 1.2:
+            return StrategySignal(
+                self.name, symbol, "SELL", 0.80, "Bearish Engulfing rejection bar confirmed at resistance", self.params
+            )
+
+        # 3. Bullish Hammer / Pin Bar at Lows
+        elif lower_wick >= c_body * 2.0 and upper_wick <= c_body * 0.5 and (c_close - c_low) / total_range >= 0.65:
+            return StrategySignal(
+                self.name, symbol, "BUY", 0.75, f"Bullish Hammer Pin Bar rejection ({lower_wick:.1f} lower wick)", self.params
+            )
+
+        return StrategySignal(self.name, symbol, "HOLD", 0.0, "Standard candlestick structure", self.params)
+
+

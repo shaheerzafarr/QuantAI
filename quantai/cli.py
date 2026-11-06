@@ -179,6 +179,42 @@ def cmd_replay(args):
     print("=" * 75 + "\n")
 
 
+def cmd_stress_test(args):
+    """Executes multi-regime stress testing (bull, chop, flash crash, rebound) and audits circuit breaker response."""
+    from quantai.research.stress_tester import StressTestingEngine
+
+    print("\n" + "=" * 75)
+    print(" 🌪️ QUANTAI MULTI-REGIME FORWARD STRESS TESTER")
+    print("=" * 75)
+    print(f" Target Pair        : {args.pair}")
+    print(f" Bars per Regime    : {args.bars_per_regime} (Total: {args.bars_per_regime * 4} bars)")
+    print(f" Target Excel File  : {args.excel}")
+    print(f" Initial Portfolio  : ${args.capital:,.2f}")
+    print("=" * 75 + "\n")
+
+    engine = StressTestingEngine(
+        excel_path=args.excel,
+        initial_capital=args.capital,
+    )
+    summary = engine.run_stress_simulation(
+        pair=args.pair,
+        bars_per_regime=args.bars_per_regime,
+    )
+
+    print("\n" + "=" * 75)
+    print(" ✅ STRESS AUDIT COMPLETE!")
+    print(f" 📊 Excel Report Generated : {summary['excel_report']}")
+    print(f" 📈 Evaluated Bars         : {summary['total_bars_evaluated']}")
+    print(f" 🎯 Total Marked Trades    : {summary['total_trades_marked']}")
+    print(f" 🏆 Win / Loss Record      : {summary['wins']}W / {summary['losses']}L ({summary['win_rate_pct']}%)")
+    print(f" 💰 Net Realized PnL       : ${summary['net_realized_pnl_usd']:+,.2f}")
+    print(f" 🚨 Circuit Breaker Tripped: {summary['circuit_breaker_triggered']}")
+    if summary["circuit_breaker_triggered"]:
+        print(f" ⏱️ Halt Timestamp         : {summary['halt_timestamp']}")
+        print(f" 🛡️ Halt Reason            : {summary['halt_reason']}")
+    print("=" * 75 + "\n")
+
+
 def cmd_api(args):
     """Starts the FastAPI server and embedded dashboard."""
     import uvicorn
@@ -261,6 +297,13 @@ def main():
     rep_p.add_argument("--capital", type=float, default=100000.0, help="Initial portfolio capital in USD")
     rep_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
 
+    # Stress Testing & Circuit Breaker Audit
+    stress_p = subparsers.add_parser("stress-test", help="Simulate multi-regime extreme market shock and audit circuit breakers")
+    stress_p.add_argument("--pair", type=str, default="BTC/USDT", help="Trading pair (default: BTC/USDT)")
+    stress_p.add_argument("--bars-per-regime", type=int, default=40, help="Bars per regime (default: 40)")
+    stress_p.add_argument("--capital", type=float, default=100000.0, help="Initial portfolio capital in USD")
+    stress_p.add_argument("--excel", type=str, default="user_data/QuantAI_Stress_Audit.xlsx", help="Output Excel path")
+
     # Freqtrade Subcommand
     ft_p = subparsers.add_parser("freqtrade", help="Run Freqtrade with QuantAI extensions")
     ft_p.add_argument("ft_action", choices=["trade", "backtest", "download-data"], help="Freqtrade operation")
@@ -288,6 +331,8 @@ def main():
         cmd_observe(args)
     elif args.command == "replay":
         cmd_replay(args)
+    elif args.command == "stress-test":
+        cmd_stress_test(args)
     elif args.command == "freqtrade":
         cmd_freqtrade(args)
     else:
