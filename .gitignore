@@ -41,6 +41,9 @@ dashboard/node_modules/
 dashboard/.next/
 dashboard/out/
 
+# Upstream Freqtrade Clone
+freqtrade/
+
 # Environment Variables
 .env
 
