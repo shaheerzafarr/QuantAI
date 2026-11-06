@@ -81,3 +81,4 @@ class HistoricalDataDownloader:
 
         logger.info(f"Successfully downloaded and persisted {saved_count} new candles for {symbol}.")
         return saved_count
+

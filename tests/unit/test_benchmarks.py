@@ -38,3 +38,4 @@ def test_benchmark_suite_execution():
         assert isinstance(r.win_rate_pct, float)
         assert isinstance(r.net_pnl_pct, float)
         assert isinstance(r.sharpe_ratio, float)
+

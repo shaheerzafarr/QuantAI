@@ -50,7 +50,33 @@ services:
     volumes:
       - ./user_data:/app/user_data
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: quantai-prometheus
+    restart: always
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - quantai-api
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: quantai-grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=quantai_admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   redis_data:
-
+  prometheus_data:
+  grafana_data:

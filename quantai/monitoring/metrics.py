@@ -40,3 +40,4 @@ class MetricsCollector:
             "",
         ]
         return "\n".join(lines) + "\n"
+

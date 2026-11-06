@@ -242,3 +242,4 @@ class BenchmarkEvaluator:
                     sells[i] = True
 
         return self._simulate_trades(df, buys, sells, "Full QuantAI Multi-Agent Engine")
+
