@@ -377,3 +377,4 @@ class BinanceLiveFuturesExecutor:
         except Exception as e:
             logger.error(f"Error fetching active positions from Binance: {e}")
             return []
+

@@ -85,3 +85,4 @@ def test_execute_live_close_success():
     assert res["success"] is True
     assert res["order_id"] == "87654321"
     assert res["exit_price"] == 155.50
+

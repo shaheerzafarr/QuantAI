@@ -87,7 +87,22 @@ class BinanceMarketDataClient:
             resp = self._session.get(url, params=params)
             resp.raise_for_status()
             raw_klines = resp.json()
+        except Exception as e:
+            # Fallback to Binance Spot API if Futures is temporarily rate-limited
+            if self.base_url == self.FUTURES_URL:
+                try:
+                    spot_url = f"{self.SPOT_URL}/klines"
+                    resp_spot = self._session.get(spot_url, params=params, timeout=5)
+                    resp_spot.raise_for_status()
+                    raw_klines = resp_spot.json()
+                except Exception:
+                    logger.warning(f"Error fetching Binance klines for {symbol}: {e}. Falling back to synthetic candles.")
+                    return self.generate_synthetic_candles(symbol=symbol, timeframe=interval, limit=limit)
+            else:
+                logger.warning(f"Error fetching Binance klines for {symbol}: {e}. Falling back to synthetic candles.")
+                return self.generate_synthetic_candles(symbol=symbol, timeframe=interval, limit=limit)
 
+        try:
             candles: List[CandleData] = []
             for row in raw_klines:
                 # row format: [open_time, open, high, low, close, volume, close_time, quote_asset_volume, trades, ...]
@@ -110,7 +125,7 @@ class BinanceMarketDataClient:
                 )
             return candles
         except Exception as e:
-            logger.warning(f"Error fetching Binance klines for {symbol}: {e}. Falling back to synthetic candles.")
+            logger.warning(f"Error parsing klines for {symbol}: {e}. Falling back to synthetic candles.")
             return self.generate_synthetic_candles(symbol=symbol, timeframe=interval, limit=limit)
 
     def fetch_orderbook(self, symbol: str = "BTCUSDT", limit: int = 50) -> OrderBookDepth:
