@@ -48,7 +48,7 @@ feature_engine = TechnicalFeatureEngine()
 regime_detector = MarketRegimeDetector()
 agent_swarm = MultiAgentSwarm()
 decision_engine = DecisionFusionEngine()
-risk_guardian = IndependentRiskGuardian(initial_capital_usd=100_000.0)
+risk_guardian = IndependentRiskGuardian(initial_capital_usd=100.0)
 execution_engine = PaperExecutionEngine()
 
 
@@ -73,6 +73,34 @@ def get_prometheus_metrics() -> str:
 
 @app.get("/api/v1/portfolio")
 def get_portfolio() -> Dict[str, Any]:
+    excel_path = os.path.abspath(os.path.join("user_data", "QuantAI_Live_Forward_Trades.xlsx"))
+    if os.path.exists(excel_path):
+        import openpyxl
+        try:
+            wb = openpyxl.load_workbook(excel_path, data_only=True)
+            if "Live Performance Summary" in wb.sheetnames:
+                ws = wb["Live Performance Summary"]
+                vals = {str(r[0]).strip(): str(r[1] or "") for r in ws.iter_rows(min_row=5, max_col=2, values_only=True) if r and r[0]}
+                bal_raw = vals.get("Current Portfolio Balance ($)", "$100.00").replace("$", "").replace(",", "").strip()
+                exp_raw = vals.get("Active Capital Exposure ($)", "$0.00").replace("$", "").replace(",", "").strip()
+                try:
+                    tot_cap = float(bal_raw)
+                    exp_cap = float(exp_raw)
+                    return {
+                        "total_capital_usd": tot_cap,
+                        "available_capital_usd": max(0.0, tot_cap - exp_cap),
+                        "active_exposure_usd": exp_cap,
+                        "peak_capital_usd": tot_cap,
+                        "daily_drawdown_pct": 0.0,
+                        "total_drawdown_pct": 0.0,
+                        "emergency_halt": False,
+                        "open_positions": [],
+                    }
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     return {
         "total_capital_usd": risk_guardian.total_capital,
         "available_capital_usd": risk_guardian.available_capital,
@@ -80,12 +108,12 @@ def get_portfolio() -> Dict[str, Any]:
         "peak_capital_usd": risk_guardian.peak_capital,
         "daily_drawdown_pct": round(
             (risk_guardian.daily_start_capital - risk_guardian.total_capital)
-            / risk_guardian.daily_start_capital,
+            / (risk_guardian.daily_start_capital or 1.0),
             4,
         ),
         "total_drawdown_pct": round(
             (risk_guardian.peak_capital - risk_guardian.total_capital)
-            / risk_guardian.peak_capital,
+            / (risk_guardian.peak_capital or 1.0),
             4,
         ),
         "emergency_halt": risk_guardian.emergency_halt,
@@ -133,6 +161,45 @@ def get_whale_events(limit: int = 20) -> List[Dict[str, Any]]:
 
 @app.get("/api/v1/decisions")
 def get_recent_decisions(limit: int = 20) -> List[Dict[str, Any]]:
+    excel_path = os.path.abspath(os.path.join("user_data", "QuantAI_Live_Forward_Trades.xlsx"))
+    if os.path.exists(excel_path):
+        import openpyxl
+        try:
+            wb = openpyxl.load_workbook(excel_path, data_only=True)
+            if "Real-Time Decisions Log" in wb.sheetnames:
+                ws = wb["Real-Time Decisions Log"]
+                rows = list(ws.iter_rows(values_only=True))
+                if len(rows) > 1:
+                    decs = []
+                    for idx, r in enumerate(reversed(rows[1:]), start=1):
+                        if not r or not r[0]:
+                            continue
+                        try:
+                            conf_val = float(str(r[5] or "0").replace("%", "").strip()) / 100.0
+                            edge_val = float(str(r[6] or "0").replace("bps", "").strip())
+                            decs.append({
+                                "id": idx,
+                                "timestamp": str(r[0]),
+                                "pair": str(r[1]),
+                                "price": float(r[2] or 0.0),
+                                "regime": str(r[3] or ""),
+                                "action": str(r[4] or ""),
+                                "confidence": conf_val,
+                                "expected_return_bps": edge_val,
+                                "risk_status": str(r[7] or ""),
+                                "supporting_evidence": [str(r[8] or "")],
+                                "contradictory_evidence": [],
+                                "explanation": str(r[8] or ""),
+                            })
+                            if len(decs) >= limit:
+                                break
+                        except Exception:
+                            continue
+                    if decs:
+                        return decs
+        except Exception:
+            pass
+
     db_mgr = get_db_manager()
     with db_mgr.get_session() as session:
         decs = (

@@ -164,3 +164,4 @@ class LiveNewsFeedAnalyzer:
             credibility_weight=min(0.95, 0.50 + (count * 0.1)),
             headline_count=count,
         )
+

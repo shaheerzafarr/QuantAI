@@ -49,7 +49,7 @@ class LiveMarketObserver:
         self,
         excel_path: str = "user_data/QuantAI_Live_Forward_Trades.xlsx",
         poll_interval_seconds: float = 15.0,
-        initial_capital: float = 500.0,
+        initial_capital: float = 100.0,
         google_sheets_webhook_url: Optional[str] = None,
     ):
         self.config = get_config()
@@ -77,7 +77,7 @@ class LiveMarketObserver:
         ]
         self.whale_engine = WhaleIntelligenceEngine()
         self.news_analyzer = LiveNewsFeedAnalyzer(cache_ttl_seconds=180.0)
-        self.decision_engine = DecisionFusionEngine(min_confidence=0.70, min_expected_edge_bps=12.0, min_strategy_confluence=2)
+        self.decision_engine = DecisionFusionEngine(min_confidence=0.60, min_expected_edge_bps=8.0, min_strategy_confluence=1)
         self.risk_guardian = IndependentRiskGuardian(initial_capital_usd=initial_capital)
         # Allow multi-asset deployment across all feasible trades in screened universe
         self.risk_guardian.risk_cfg.max_portfolio_exposure_pct = 0.90
@@ -745,6 +745,9 @@ class LiveMarketObserver:
                     logger.info(f"Cross-Market Screener loaded {len(universe_pairs)} top perpetual coins: {universe_pairs[:10]}...")
             except Exception as e:
                 logger.warning(f"Failed to auto-screen perpetual universe: {e}")
+
+        # Initial baseline sync to Excel and Google Sheets
+        self.sync_to_excel()
 
         count = 0
         while self.running:

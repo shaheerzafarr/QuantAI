@@ -288,7 +288,7 @@ def main():
     obs_p = subparsers.add_parser("observe", help="Continuously scan market, mark paper trades, track outcomes, and update live Excel")
     obs_p.add_argument("--interval", type=float, default=10.0, help="Polling interval in seconds (default: 10)")
     obs_p.add_argument("--cycles", type=int, default=None, help="Total cycles to run (default: infinite)")
-    obs_p.add_argument("--capital", type=float, default=500.0, help="Initial portfolio capital in USD (default: 500)")
+    obs_p.add_argument("--capital", type=float, default=100.0, help="Initial portfolio capital in USD (default: 100)")
     obs_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
 
     # Strategy Replay & Outcome Verification
