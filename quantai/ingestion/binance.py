@@ -22,10 +22,15 @@ class BinanceMarketDataClient:
     FUTURES_URL = "https://fapi.binance.com/fapi/v1"
 
     def __init__(self, timeout: float = 10.0, market_type: str = "futures"):
+        import os
         self.timeout = timeout
         self.market_type = market_type
         self.base_url = self.FUTURES_URL if market_type == "futures" else self.SPOT_URL
-        self._session = httpx.Client(timeout=timeout)
+        api_key = os.getenv("BINANCE_API_KEY", "")
+        headers = {}
+        if api_key:
+            headers["X-MBX-APIKEY"] = api_key
+        self._session = httpx.Client(timeout=timeout, headers=headers)
 
     def get_top_perpetual_pairs(
         self,

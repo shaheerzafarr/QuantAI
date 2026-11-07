@@ -19,7 +19,8 @@ from openpyxl.utils import get_column_letter
 import requests
 
 from quantai.common import pd
-from quantai.config.settings import get_config
+from quantai.config.settings import get_config, ExecutionMode
+from quantai.execution.binance_live import BinanceLiveFuturesExecutor
 from quantai.ingestion.binance import BinanceMarketDataClient
 from quantai.intelligence.technical.feature_engine import TechnicalFeatureEngine
 from quantai.intelligence.market_regime.detector import MarketRegimeDetector
@@ -51,12 +52,14 @@ class LiveMarketObserver:
         poll_interval_seconds: float = 15.0,
         initial_capital: float = 100.0,
         google_sheets_webhook_url: Optional[str] = None,
+        live_execution: bool = False,
     ):
         self.config = get_config()
         self.excel_path = os.path.abspath(excel_path)
         self.interval = poll_interval_seconds
         self.initial_capital = initial_capital
         self.running = False
+        self.live_execution = live_execution or (self.config.execution_mode == ExecutionMode.LIVE)
         self.google_sheets_webhook_url = google_sheets_webhook_url or os.getenv(
             "QUANTAI_GSHEETS_WEBHOOK",
             "https://script.google.com/macros/s/AKfycbz_IKBRe10Xa9-R9UWyUgPK1wCgWzu1yA6dbT-P2X276shFITRodGi_8LPhRbnV6SAc5w/exec",
@@ -78,7 +81,25 @@ class LiveMarketObserver:
         self.whale_engine = WhaleIntelligenceEngine()
         self.news_analyzer = LiveNewsFeedAnalyzer(cache_ttl_seconds=180.0)
         self.decision_engine = DecisionFusionEngine(min_confidence=0.60, min_expected_edge_bps=8.0, min_strategy_confluence=1)
-        self.risk_guardian = IndependentRiskGuardian(initial_capital_usd=initial_capital)
+
+        # Initialize live executor and balance if enabled
+        self.live_executor = None
+        self.binance_permissions: Dict[str, Any] = {}
+        if self.live_execution:
+            self.live_executor = BinanceLiveFuturesExecutor(default_leverage=self.config.exchange.default_leverage)
+            self.binance_permissions = self.live_executor.check_api_permissions()
+            live_bal = self.live_executor.get_live_futures_balance()
+            if live_bal.get("total_usdt", 0.0) > 0:
+                self.initial_capital = live_bal["total_usdt"]
+                logger.info(
+                    f"CONNECTED TO LIVE BINANCE FUTURES WALLET! Balance: ${live_bal['total_usdt']:,.2f} USDT | Available: ${live_bal['free_usdt']:,.2f} USDT"
+                )
+            if not self.binance_permissions.get("can_trade_futures", False):
+                logger.warning(
+                    f"BINANCE API NOTICE: Futures order placement requires 'Enable Futures' permission in Binance API Management. ({self.binance_permissions.get('reason')})"
+                )
+
+        self.risk_guardian = IndependentRiskGuardian(initial_capital_usd=self.initial_capital)
         # Allow multi-asset deployment across all feasible trades in screened universe
         self.risk_guardian.risk_cfg.max_portfolio_exposure_pct = 0.90
         self.ml_model = QuantMLModel(model_version="live_observer_v1")
@@ -142,6 +163,18 @@ class LiveMarketObserver:
                 exit_reason = "LIQUIDATION"
 
         if hit_tp or hit_sl:
+            if getattr(self, "live_execution", False) and getattr(self, "live_executor", None) and trade.get("live_order_id"):
+                try:
+                    close_res = self.live_executor.execute_live_close(
+                        symbol=pair,
+                        side=trade["side"],
+                        amount=trade["amount"],
+                    )
+                    if close_res.get("success") and close_res.get("exit_price", 0.0) > 0:
+                        exit_price = close_res["exit_price"]
+                except Exception as e:
+                    logger.error(f"Failed to execute Binance live close on {pair}: {e}")
+
             fee_exit = trade["allocated_usd"] * 0.0005  # 5 bps futures fee
             total_fees = trade["fee_entry_usd"] + fee_exit
             gross_pnl = (
@@ -320,7 +353,9 @@ class LiveMarketObserver:
         # 6. Mark New Trade if approved and no trade currently open on this pair
         new_trade = None
         if verdict.approved and pair not in self.active_trades:
-            max_positions = getattr(self.config.exchange, "max_active_positions", 7)
+            configured_max = getattr(self.config.exchange, "max_active_positions", 7)
+            effective_cap = self.risk_guardian.total_capital
+            max_positions = min(configured_max, max(1, int(effective_cap // 8.0)))
             if len(self.active_trades) >= max_positions:
                 logger.info(f"Skipping trade on {pair}: Max active positions ceiling ({max_positions}) reached.")
             else:
@@ -335,8 +370,35 @@ class LiveMarketObserver:
                 whale_info = f"Whales: {whale_data.get('whale_bias', 'NEUTRAL')} (${whale_data.get('whale_net_delta_usd', 0):+,.0f})"
                 news_info = f"News: {news_data.get('bias', 'NEUTRAL')} (score: {news_data.get('sentiment_score', 0):+.2f})"
 
+                live_order_id = None
+                live_execution_status = "FORWARD_PAPER"
+                actual_entry_price = current_price
+                actual_amount = verdict.position_size_asset
+
+                if getattr(self, "live_execution", False) and getattr(self, "live_executor", None):
+                    exec_res = self.live_executor.execute_live_entry(
+                        symbol=pair,
+                        side=trade_side,
+                        notional_usd=verdict.allocated_usd,
+                        current_price=current_price,
+                        leverage=leverage,
+                        stop_loss_price=verdict.stop_loss_price,
+                        take_profit_price=verdict.take_profit_price,
+                    )
+                    if exec_res.get("success"):
+                        live_order_id = exec_res.get("order_id")
+                        live_execution_status = f"LIVE_FILLED (ID: {live_order_id})"
+                        actual_entry_price = exec_res.get("avg_price", current_price)
+                        actual_amount = exec_res.get("filled_qty", verdict.position_size_asset)
+                    else:
+                        live_execution_status = f"LIVE_PENDING_PERMS: {exec_res.get('error', 'Rejected')[:35]}"
+                        logger.warning(f"Binance Live Order notice on {pair}: {exec_res.get('error')}")
+
                 new_trade = {
                     "trade_id": trade_id,
+                    "live_order_id": live_order_id,
+                    "execution_mode": "LIVE_BINANCE" if live_order_id else "FORWARD_PAPER",
+                    "execution_status": live_execution_status,
                     "pair": pair,
                     "status": "OPEN",
                     "side": trade_side,
@@ -344,11 +406,11 @@ class LiveMarketObserver:
                     "margin_usd": margin_usd,
                     "entry_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
                     "exit_time": "IN_PROGRESS",
-                    "entry_price": current_price,
-                    "current_price": current_price,
+                    "entry_price": actual_entry_price,
+                    "current_price": actual_entry_price,
                     "exit_price": 0.0,
                     "allocated_usd": verdict.allocated_usd,  # Notional position size
-                    "amount": verdict.position_size_asset,
+                    "amount": actual_amount,
                     "stop_loss": verdict.stop_loss_price,
                     "take_profit": verdict.take_profit_price,
                     "liquidation_price": getattr(verdict, "liquidation_price", 0.0),
@@ -413,9 +475,12 @@ class LiveMarketObserver:
         ws_sum.title = "Live Performance Summary"
         ws_sum.views.sheetView[0].showGridLines = True
 
-        ws_sum["A2"] = "QUANTAI FORWARD PAPER TRADING & OUTCOME VERIFICATION REPORT"
+        is_live = getattr(self, "live_execution", False)
+        perm_text = "FUTURES TRADING ACTIVE" if self.binance_permissions.get("can_trade_futures") else "READ-ONLY (ENABLE FUTURES IN BINANCE API)"
+        report_title = "QUANTAI LIVE REAL-MONEY TRADING & BINANCE FUTURES REPORT" if is_live else "QUANTAI FORWARD PAPER TRADING & OUTCOME VERIFICATION REPORT"
+        ws_sum["A2"] = report_title
         ws_sum["A2"].font = title_font
-        ws_sum["A3"] = f"Live Automated Tracking • Updated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        ws_sum["A3"] = f"{'Live Binance Execution' if is_live else 'Live Automated Tracking'} • Updated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
         ws_sum["A3"].font = sub_font
 
         wins = [t for t in self.completed_trades if t.get("realized_pnl_usd", 0) > 0]
@@ -425,6 +490,8 @@ class LiveMarketObserver:
         profit_factor = (sum(t["realized_pnl_usd"] for t in wins) / abs(sum(t["realized_pnl_usd"] for t in losses))) if losses and sum(t["realized_pnl_usd"] for t in losses) != 0 else 999.0
 
         kpis = [
+            ("Execution Mode", "LIVE BINANCE REAL MONEY" if is_live else "FORWARD PAPER SIMULATION"),
+            ("Binance API Status", perm_text if is_live else "CONNECTED (PAPER OBSERVER)"),
             ("Current Portfolio Balance ($)", f"${self.risk_guardian.total_capital:,.2f}"),
             ("Net Cumulative Realized PnL ($)", f"${total_pnl:+,.2f}"),
             ("Net Realized Return (%)", f"{(total_pnl / self.initial_capital) * 100:+.2f}%"),
@@ -635,7 +702,13 @@ class LiveMarketObserver:
                 )
 
                 # 1. Summary Matrix
+                is_live = getattr(self, "live_execution", False)
+                perm_text = "FUTURES TRADING ACTIVE" if self.binance_permissions.get("can_trade_futures") else "READ-ONLY (ENABLE FUTURES IN BINANCE API)"
+                report_title = "QUANTAI LIVE REAL-MONEY TRADING & BINANCE FUTURES REPORT" if is_live else "QUANTAI FORWARD PAPER TRADING & OUTCOME VERIFICATION REPORT"
+
                 kpis = [
+                    ("Execution Mode", "LIVE BINANCE REAL MONEY" if is_live else "FORWARD PAPER SIMULATION"),
+                    ("Binance API Status", perm_text if is_live else "CONNECTED (PAPER OBSERVER)"),
                     ("Current Portfolio Balance ($)", f"${self.risk_guardian.total_capital:,.2f}"),
                     ("Net Cumulative Realized PnL ($)", f"${total_pnl:+,.2f}"),
                     ("Net Realized Return (%)", f"{(total_pnl / self.initial_capital) * 100:+.2f}%"),
@@ -650,8 +723,8 @@ class LiveMarketObserver:
                 ]
                 sum_rows = [
                     ["", ""],
-                    ["QUANTAI FORWARD PAPER TRADING & OUTCOME VERIFICATION REPORT", ""],
-                    [f"Live Automated Tracking • Updated at: {now_str}", ""],
+                    [report_title, ""],
+                    [f"{'Live Binance Execution' if is_live else 'Live Automated Tracking'} • Updated at: {now_str}", ""],
                     ["", ""],
                     ["Portfolio & Strategy Metric", "Audit Value"],
                 ] + [[kpi, val] for kpi, val in kpis]
@@ -768,6 +841,7 @@ class LiveMarketObserver:
                     self.scan_and_analyze(pair)
                 except Exception as e:
                     logger.error(f"Observation error on {pair}: {e}", exc_info=True)
+                await asyncio.sleep(0.35)
 
             count += 1
             if cycles and count >= cycles:

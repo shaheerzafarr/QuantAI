@@ -116,15 +116,21 @@ def cmd_observe(args):
     import asyncio
     from quantai.execution.live_observer import LiveMarketObserver
 
+    is_live = getattr(args, "live", False)
+
     print("\n" + "=" * 75)
-    print(" 📡 QUANTAI CONTINUOUS LIVE OBSERVER & OUTCOME TRACKER")
+    if is_live:
+        print(" 🔴 QUANTAI LIVE REAL-MONEY TRADING & BINANCE FUTURES EXECUTOR")
+    else:
+        print(" 📡 QUANTAI CONTINUOUS LIVE OBSERVER & OUTCOME TRACKER")
     print("=" * 75)
+    print(f" Execution Mode     : {'LIVE BINANCE REAL MONEY' if is_live else 'FORWARD PAPER SIMULATION'}")
     print(f" Target Excel File  : {args.excel}")
     print(f" Scan Interval      : {args.interval}s")
-    print(f" Initial Portfolio  : ${args.capital:,.2f}")
+    print(f" Portfolio Capital  : ${args.capital:,.2f} (Auto-syncs from Binance in Live Mode)")
     print(f" Market Type        : Binance USDT-M Perpetual Futures (3x Leverage)")
     print(f" Auto-Screening     : Top 20 liquid perpetual contracts (> $50M 24h vol)")
-    print(f" Mode               : Multi-Coin Live Execution & Single-File Excel Ledger")
+    print(f" Ledger Update      : Single-File In-Place Live Excel Sync")
     print(" Press Ctrl+C at any time to halt.")
     print("=" * 75 + "\n")
 
@@ -132,6 +138,7 @@ def cmd_observe(args):
         excel_path=args.excel,
         poll_interval_seconds=args.interval,
         initial_capital=args.capital,
+        live_execution=is_live,
     )
 
     loop = asyncio.new_event_loop()
@@ -290,6 +297,7 @@ def main():
     obs_p.add_argument("--cycles", type=int, default=None, help="Total cycles to run (default: infinite)")
     obs_p.add_argument("--capital", type=float, default=100.0, help="Initial portfolio capital in USD (default: 100)")
     obs_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
+    obs_p.add_argument("--live", action="store_true", help="Enable live real-money execution on Binance Futures")
 
     # Strategy Replay & Outcome Verification
     rep_p = subparsers.add_parser("replay", help="Replay Binance candles sequentially to verify strategy discovery and outcome tracking")

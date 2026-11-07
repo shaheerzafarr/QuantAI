@@ -48,3 +48,7 @@ freqtrade/
 # Environment Variables
 .env
 
+# Scratch scripts
+scratch/
+
+
