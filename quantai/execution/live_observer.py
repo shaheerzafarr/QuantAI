@@ -47,7 +47,7 @@ class LiveMarketObserver:
         self,
         excel_path: str = "user_data/QuantAI_Live_Forward_Trades.xlsx",
         poll_interval_seconds: float = 15.0,
-        initial_capital: float = 100_000.0,
+        initial_capital: float = 500.0,
         google_sheets_webhook_url: Optional[str] = None,
     ):
         self.config = get_config()
@@ -75,6 +75,8 @@ class LiveMarketObserver:
         ]
         self.decision_engine = DecisionFusionEngine(min_confidence=0.55, min_expected_edge_bps=8.0)
         self.risk_guardian = IndependentRiskGuardian(initial_capital_usd=initial_capital)
+        # Allow multi-asset deployment across all feasible trades in screened universe
+        self.risk_guardian.risk_cfg.max_portfolio_exposure_pct = 0.90
         self.ml_model = QuantMLModel(model_version="live_observer_v1")
 
         # In-memory tracking ledgers
@@ -290,7 +292,7 @@ class LiveMarketObserver:
         # 6. Mark New Trade if approved and no trade currently open on this pair
         new_trade = None
         if verdict.approved and pair not in self.active_trades:
-            max_positions = getattr(self.config.exchange, "max_active_positions", 5)
+            max_positions = getattr(self.config.exchange, "max_active_positions", 15)
             if len(self.active_trades) >= max_positions:
                 logger.info(f"Skipping trade on {pair}: Max active positions ceiling ({max_positions}) reached.")
             else:
@@ -339,15 +341,6 @@ class LiveMarketObserver:
                 logger.info(
                     f"FUTURES TRADE MARKED: [{pair}] {trade_id} | Side: {trade_side} | Leverage: {leverage}x | Margin: ${margin_usd:,.2f} | Notional: ${verdict.allocated_usd:,.2f} | TP: ${verdict.take_profit_price} | SL: ${verdict.stop_loss_price}"
                 )
-
-            self.risk_guardian.update_portfolio_state(
-                current_total_usd=self.risk_guardian.total_capital,
-                active_exposure_usd=self.risk_guardian.active_exposure_usd + verdict.allocated_usd,
-            )
-
-            logger.info(
-                f"TRADE MARKED: [{pair}] {trade_id} {verdict.action} @ ${current_price:,.2f} | TP: ${verdict.take_profit_price:,.2f} | SL: ${verdict.stop_loss_price:,.2f}"
-            )
 
         # 7. Write/Update Excel Workbook
         self.sync_to_excel()
@@ -559,18 +552,34 @@ class LiveMarketObserver:
                 col_letter = get_column_letter(col[0].column)
                 ws.column_dimensions[col_letter].width = min(42, max(max_len + 3, 12))
 
-        # Safe save with retry in case user has file open
+        # Safe in-place write with retry, ensuring ONLY one target file is updated
         temp_path = self.excel_path + ".tmp"
-        try:
-            wb.save(temp_path)
-            os.replace(temp_path, self.excel_path)
-        except PermissionError:
-            # If Excel has a file lock, save to timestamped file so execution never crashes
-            alt_path = self.excel_path.replace(".xlsx", f"_{int(time.time())}.xlsx")
-            wb.save(alt_path)
-            logger.warning(f"File locked by Excel. Saved update to alternative path: {alt_path}")
-        except Exception as e:
-            logger.error(f"Error saving Excel workbook: {e}")
+        saved = False
+        for attempt in range(5):
+            try:
+                wb.save(temp_path)
+                os.replace(temp_path, self.excel_path)
+                saved = True
+                break
+            except PermissionError:
+                time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Error saving Excel workbook to {self.excel_path}: {e}")
+                break
+            finally:
+                if os.path.exists(temp_path) and saved:
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+
+        if not saved:
+            logger.warning(
+                f"File {self.excel_path} temporarily locked by an external process. "
+                "Skipping file overwrite this cycle to preserve a single target file. Next cycle will retry automatically."
+            )
+        else:
+            logger.debug(f"Excel workbook successfully updated: {self.excel_path}")
 
         # Stream update to live Google Sheet if webhook configured
         self.sync_to_google_sheets()

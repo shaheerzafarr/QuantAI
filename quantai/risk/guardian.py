@@ -34,7 +34,7 @@ class IndependentRiskGuardian:
 
     def __init__(self, initial_capital_usd: float = 100_000.0):
         self.config = get_config()
-        self.risk_cfg = self.config.risk
+        self.risk_cfg = self.config.risk.model_copy()
         self.total_capital = initial_capital_usd
         self.available_capital = initial_capital_usd
         self.active_exposure_usd = 0.0
@@ -100,8 +100,13 @@ class IndependentRiskGuardian:
             return 0.0
 
         fractional_kelly = kelly_full * self.risk_cfg.kelly_fraction
-        # Cap at single-trade max risk allocation
-        target_allocation_pct = min(self.risk_cfg.max_risk_per_trade_pct * 3.0, fractional_kelly)
+        if self.total_capital <= 1000.0:
+            # Scaled margin for small portfolio ($500 capital):
+            # Target 4% - 6% margin ($20 - $30) to clear futures exchange order minimums comfortably
+            target_allocation_pct = max(0.04, min(0.06, fractional_kelly))
+        else:
+            # Cap at single-trade max risk allocation
+            target_allocation_pct = min(self.risk_cfg.max_risk_per_trade_pct * 3.0, fractional_kelly)
         target_usd = self.total_capital * target_allocation_pct
         return round(min(target_usd, self.available_capital), 2)
 
@@ -173,11 +178,12 @@ class IndependentRiskGuardian:
             expected_win_loss_ratio=rr_ratio,
         )
 
-        if allocated_usd < 15.0:  # Binance spot minimum order size
+        min_margin = 10.0 if getattr(self.config.exchange, "market_type", "futures") == "futures" else 15.0
+        if allocated_usd < min_margin:
             return self._veto(
                 decision.pair,
                 decision.action,
-                f"Calculated allocation (${allocated_usd:.2f}) below exchange minimum order size ($15).",
+                f"Calculated allocation (${allocated_usd:.2f}) below exchange minimum threshold (${min_margin:.0f}).",
             )
 
         leverage = getattr(self.config.exchange, "default_leverage", 3)

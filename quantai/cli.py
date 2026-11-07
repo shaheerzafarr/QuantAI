@@ -121,8 +121,10 @@ def cmd_observe(args):
     print("=" * 75)
     print(f" Target Excel File  : {args.excel}")
     print(f" Scan Interval      : {args.interval}s")
-    print(f" Monitoring Pairs   : BTC/USDT, ETH/USDT")
-    print(f" Mode               : Real-Time Scanning + Outcome Ledger Synchronization")
+    print(f" Initial Portfolio  : ${args.capital:,.2f}")
+    print(f" Market Type        : Binance USDT-M Perpetual Futures (3x Leverage)")
+    print(f" Auto-Screening     : Top 20 liquid perpetual contracts (> $50M 24h vol)")
+    print(f" Mode               : Multi-Coin Live Execution & Single-File Excel Ledger")
     print(" Press Ctrl+C at any time to halt.")
     print("=" * 75 + "\n")
 
@@ -286,7 +288,7 @@ def main():
     obs_p = subparsers.add_parser("observe", help="Continuously scan market, mark paper trades, track outcomes, and update live Excel")
     obs_p.add_argument("--interval", type=float, default=10.0, help="Polling interval in seconds (default: 10)")
     obs_p.add_argument("--cycles", type=int, default=None, help="Total cycles to run (default: infinite)")
-    obs_p.add_argument("--capital", type=float, default=100000.0, help="Initial portfolio capital in USD")
+    obs_p.add_argument("--capital", type=float, default=500.0, help="Initial portfolio capital in USD (default: 500)")
     obs_p.add_argument("--excel", type=str, default="user_data/QuantAI_Live_Forward_Trades.xlsx", help="Output live Excel path")
 
     # Strategy Replay & Outcome Verification
