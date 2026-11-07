@@ -110,6 +110,57 @@ class LiveMarketObserver:
         self.decisions_history: List[Dict[str, Any]] = []
         self.trade_counter = 1
 
+        # Pre-populate active trades directly from Binance if in live mode
+        if self.live_execution and self.live_executor:
+            try:
+                live_pos = self.live_executor.fetch_active_positions()
+                for p in live_pos:
+                    raw_sym = p.get("symbol", "")
+                    norm_sym = raw_sym.split(":")[0] if ":" in raw_sym else raw_sym
+                    trade_side = p.get("side", "LONG").upper()
+                    entry_p = p.get("entry_price", 0.0)
+                    notional = p.get("notional", 0.0)
+                    contracts = p.get("contracts", 0.0)
+                    liq_p = p.get("liquidation_price", 0.0)
+                    lev = p.get("leverage", 3)
+                    margin = round(notional / lev, 2)
+                    trade_id = f"FUT_{self.trade_counter:04d}"
+                    self.trade_counter += 1
+                    self.active_trades[norm_sym] = {
+                        "trade_id": trade_id,
+                        "live_order_id": "BINANCE_ACTIVE",
+                        "execution_mode": "LIVE_BINANCE",
+                        "execution_status": "LIVE_FILLED",
+                        "pair": norm_sym,
+                        "status": "OPEN",
+                        "side": trade_side,
+                        "leverage": f"{lev}x",
+                        "margin_usd": margin,
+                        "entry_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        "exit_time": "IN_PROGRESS",
+                        "entry_price": entry_p,
+                        "current_price": entry_p,
+                        "exit_price": 0.0,
+                        "allocated_usd": notional,
+                        "amount": contracts,
+                        "stop_loss": round(entry_p * (0.97 if trade_side == "LONG" else 1.03), 4),
+                        "take_profit": round(entry_p * (1.06 if trade_side == "LONG" else 0.94), 4),
+                        "liquidation_price": liq_p,
+                        "risk_reward_ratio": 2.0,
+                        "fee_entry_usd": round(notional * 0.0005, 4),
+                        "unrealized_pnl_usd": 0.0,
+                        "unrealized_pnl_pct": 0.0,
+                        "realized_pnl_usd": 0.0,
+                        "realized_pnl_pct": 0.0,
+                        "exit_reason": "MONITORING",
+                        "thesis_confirmed": "PENDING",
+                        "strategy_rationale": "Live Binance Open Position",
+                    }
+                if live_pos:
+                    logger.info(f"Loaded {len(live_pos)} real open positions from Binance Futures: {[p['symbol'] for p in live_pos]}")
+            except Exception as e:
+                logger.warning(f"Error loading initial open positions from Binance: {e}")
+
     def evaluate_open_trades(
         self,
         pair: str,
@@ -222,6 +273,72 @@ class LiveMarketObserver:
             trade["unrealized_pnl_pct"] = round((current_unrealized / margin_usd) * 100.0, 2)
 
         return resolved
+
+    def reconcile_with_binance_positions(self):
+        """Synchronizes local open trades with live Binance Futures wallet positions."""
+        if not getattr(self, "live_execution", False) or not getattr(self, "live_executor", None):
+            return
+
+        try:
+            # 1. Update wallet balance directly from Binance
+            bal = self.live_executor.get_live_futures_balance()
+            if bal.get("total_usdt", 0.0) > 0:
+                self.risk_guardian.total_capital = bal["total_usdt"]
+                self.risk_guardian.available_capital = bal.get("free_usdt", self.risk_guardian.available_capital)
+
+            # 2. Query all active open positions on Binance Futures
+            live_pos_list = self.live_executor.fetch_active_positions()
+            # Normalize active symbols: e.g. "XRP/USDT:USDT" -> "XRP/USDT"
+            live_symbols = set()
+            for p in live_pos_list:
+                raw_sym = p.get("symbol", "")
+                norm_sym = raw_sym.split(":")[0] if ":" in raw_sym else raw_sym
+                live_symbols.add(norm_sym)
+
+            # 3. Detect any positions closed externally on Binance app or web
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            closed_any = False
+            for pair, trade in list(self.active_trades.items()):
+                # If this trade was routed to Binance or live execution is active
+                if trade.get("execution_mode") == "LIVE_BINANCE" or trade.get("live_order_id"):
+                    if pair not in live_symbols:
+                        # Position is no longer open on Binance!
+                        margin_usd = trade.get("margin_usd", trade["allocated_usd"] / 3.0)
+                        exit_price = trade.get("current_price", trade["entry_price"])
+
+                        is_long = trade["side"] in ["BUY", "LONG"]
+                        gross_pnl = (
+                            (exit_price - trade["entry_price"]) * trade["amount"]
+                            if is_long
+                            else (trade["entry_price"] - exit_price) * trade["amount"]
+                        )
+                        fee_exit = trade["allocated_usd"] * 0.0005
+                        net_pnl = gross_pnl - fee_exit
+                        net_pnl_pct = (net_pnl / margin_usd) * 100.0
+
+                        trade["status"] = "CLOSED_WIN" if net_pnl >= 0 else "CLOSED_LOSS"
+                        trade["exit_price"] = round(exit_price, 4)
+                        trade["exit_time"] = now_str
+                        trade["exit_reason"] = "CLOSED_ON_BINANCE_APP"
+                        trade["realized_pnl_usd"] = round(net_pnl, 2)
+                        trade["realized_pnl_pct"] = round(net_pnl_pct, 2)
+                        trade["thesis_confirmed"] = "YES" if net_pnl > 0 else "NO"
+
+                        self.completed_trades.append(trade)
+                        del self.active_trades[pair]
+                        closed_any = True
+                        logger.info(
+                            f"BINANCE SYNC: [{pair}] {trade['trade_id']} detected closed on Binance app. Realized: ${net_pnl:+,.2f} ({net_pnl_pct:+.2f}%)"
+                        )
+
+            # 4. Update active margin exposure
+            active_margin = sum(t.get("margin_usd", t["allocated_usd"] / 3.0) for t in self.active_trades.values())
+            self.risk_guardian.active_exposure_usd = active_margin
+
+            if closed_any:
+                self.sync_to_excel()
+        except Exception as e:
+            logger.warning(f"Notice during Binance position reconciliation: {e}")
 
     def scan_and_analyze(
         self,
@@ -820,10 +937,14 @@ class LiveMarketObserver:
                 logger.warning(f"Failed to auto-screen perpetual universe: {e}")
 
         # Initial baseline sync to Excel and Google Sheets
+        self.reconcile_with_binance_positions()
         self.sync_to_excel()
 
         count = 0
         while self.running:
+            # 0. Reconcile positions and wallet balance with Binance in real-time
+            self.reconcile_with_binance_positions()
+
             # Refresh top liquid universe every 20 cycles (~5 min)
             if count > 0 and count % 20 == 0 and getattr(self.config.exchange, "auto_screen_universe", True):
                 try:
