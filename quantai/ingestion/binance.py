@@ -16,13 +16,53 @@ logger = logging.getLogger(__name__)
 
 
 class BinanceMarketDataClient:
-    """Binance Spot REST & Market Ingestion Client."""
+    """Binance Spot & Perpetual Futures REST Market Ingestion Client."""
 
-    BASE_URL = "https://api.binance.com/api/v3"
+    SPOT_URL = "https://api.binance.com/api/v3"
+    FUTURES_URL = "https://fapi.binance.com/fapi/v1"
 
-    def __init__(self, timeout: float = 10.0):
+    def __init__(self, timeout: float = 10.0, market_type: str = "futures"):
         self.timeout = timeout
+        self.market_type = market_type
+        self.base_url = self.FUTURES_URL if market_type == "futures" else self.SPOT_URL
         self._session = httpx.Client(timeout=timeout)
+
+    def get_top_perpetual_pairs(
+        self,
+        limit: int = 25,
+        min_24h_volume_usd: float = 50_000_000.0,
+    ) -> List[str]:
+        """Scans the Binance Futures universe and returns top active liquid USDT-M perpetual contracts."""
+        try:
+            resp = self._session.get(f"{self.FUTURES_URL}/ticker/24hr")
+            resp.raise_for_status()
+            data = resp.json()
+            pairs = []
+            for item in data:
+                sym = item.get("symbol", "")
+                if sym.endswith("USDT") and not sym.startswith("1000"):
+                    q_vol = float(item.get("quoteVolume", 0))
+                    if q_vol >= min_24h_volume_usd:
+                        formatted = f"{sym[:-4]}/USDT"
+                        pairs.append((formatted, q_vol))
+            pairs.sort(key=lambda x: x[1], reverse=True)
+            return [p[0] for p in pairs[:limit]]
+        except Exception as e:
+            logger.warning(f"Error scanning top perpetual pairs: {e}. Falling back to default list.")
+            return ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT"]
+
+    def fetch_funding_rate(self, symbol: str = "BTC/USDT") -> float:
+        """Fetches the latest 8h perpetual funding rate."""
+        clean_symbol = symbol.replace("/", "").upper()
+        try:
+            resp = self._session.get(f"{self.FUTURES_URL}/fundingRate", params={"symbol": clean_symbol, "limit": 1})
+            resp.raise_for_status()
+            data = resp.json()
+            if data and isinstance(data, list):
+                return float(data[0].get("fundingRate", 0.0001))
+            return 0.0001
+        except Exception:
+            return 0.0001
 
     def fetch_klines(
         self,
@@ -31,9 +71,9 @@ class BinanceMarketDataClient:
         limit: int = 100,
         start_time: Optional[int] = None,
     ) -> List[CandleData]:
-        """Fetch historical or latest OHLCV candles from Binance."""
+        """Fetch historical or latest OHLCV candles from Binance (Spot or Futures)."""
         clean_symbol = symbol.replace("/", "").upper()
-        url = f"{self.BASE_URL}/klines"
+        url = f"{self.base_url}/klines"
         params = {"symbol": clean_symbol, "interval": interval, "limit": limit}
         if start_time:
             params["startTime"] = start_time
@@ -71,7 +111,7 @@ class BinanceMarketDataClient:
     def fetch_orderbook(self, symbol: str = "BTCUSDT", limit: int = 50) -> OrderBookDepth:
         """Fetch current order book depth snapshot."""
         clean_symbol = symbol.replace("/", "").upper()
-        url = f"{self.BASE_URL}/depth"
+        url = f"{self.base_url}/depth"
         params = {"symbol": clean_symbol, "limit": limit}
 
         try:

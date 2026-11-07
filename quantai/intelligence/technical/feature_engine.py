@@ -82,6 +82,11 @@ class TechnicalFeatureEngine:
         # Volatility ratio
         df["volatility_ratio"] = df["atr_14"] / (df["close"] + 1e-10)
 
+        # Volume Moving Average & Surge Detection
+        df["volume_sma_20"] = df["volume"].rolling(20).mean()
+        df["volume_surge"] = df["volume"] / (df["volume_sma_20"] + 1e-10)
+        df["candle_body_ratio"] = abs(df["close"] - df["open"]) / (df["high"] - df["low"] + 1e-10)
+
         # Fill NaNs from early rolling windows
         df.bfill(inplace=True)
         return df

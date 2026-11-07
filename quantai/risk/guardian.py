@@ -24,6 +24,9 @@ class RiskVerdict:
     take_profit_price: float
     risk_reward_ratio: float
     veto_reason: Optional[str] = None
+    leverage: int = 1
+    margin_usd: float = 0.0
+    liquidation_price: float = 0.0
 
 
 class IndependentRiskGuardian:
@@ -177,18 +180,29 @@ class IndependentRiskGuardian:
                 f"Calculated allocation (${allocated_usd:.2f}) below exchange minimum order size ($15).",
             )
 
-        asset_qty = round(allocated_usd / current_price, 6)
+        leverage = getattr(self.config.exchange, "default_leverage", 3)
+        margin_usd = allocated_usd
+        position_notional = round(allocated_usd * leverage, 2)
+        asset_qty = round(position_notional / current_price, 6)
+
+        if decision.action == "BUY":
+            liq_price = round(current_price * (1.0 - (1.0 / leverage) * 0.95), 4)
+        else:
+            liq_price = round(current_price * (1.0 + (1.0 / leverage) * 0.95), 4)
 
         return RiskVerdict(
             approved=True,
             pair=decision.pair,
             action=decision.action,
-            allocated_usd=allocated_usd,
+            allocated_usd=position_notional,
             position_size_asset=asset_qty,
-            stop_loss_price=round(stop_price, 2),
-            take_profit_price=round(take_profit_price, 2),
+            stop_loss_price=round(stop_price, 4),
+            take_profit_price=round(take_profit_price, 4),
             risk_reward_ratio=round(rr_ratio, 2),
             veto_reason=None,
+            leverage=leverage,
+            margin_usd=margin_usd,
+            liquidation_price=liq_price,
         )
 
     def _veto(self, pair: str, action: str, reason: str) -> RiskVerdict:
@@ -214,5 +228,8 @@ class IndependentRiskGuardian:
             take_profit_price=0.0,
             risk_reward_ratio=0.0,
             veto_reason=reason,
+            leverage=1,
+            margin_usd=0.0,
+            liquidation_price=0.0,
         )
 

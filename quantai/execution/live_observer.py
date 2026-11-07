@@ -105,7 +105,10 @@ class LiveMarketObserver:
         check_high = high if high is not None else current_price
         check_low = low if low is not None else current_price
 
-        if trade["side"] == "BUY":
+        is_long = trade["side"] in ["BUY", "LONG"]
+        is_short = trade["side"] in ["SELL", "SHORT"]
+
+        if is_long:
             if check_high >= trade["take_profit"]:
                 hit_tp = True
                 exit_price = trade["take_profit"]
@@ -114,7 +117,11 @@ class LiveMarketObserver:
                 hit_sl = True
                 exit_price = trade["stop_loss"]
                 exit_reason = "HIT_STOP_LOSS"
-        elif trade["side"] == "SELL":
+            elif trade.get("liquidation_price", 0.0) > 0 and check_low <= trade["liquidation_price"]:
+                hit_sl = True
+                exit_price = trade["liquidation_price"]
+                exit_reason = "LIQUIDATION"
+        elif is_short:
             if check_low <= trade["take_profit"]:
                 hit_tp = True
                 exit_price = trade["take_profit"]
@@ -123,22 +130,27 @@ class LiveMarketObserver:
                 hit_sl = True
                 exit_price = trade["stop_loss"]
                 exit_reason = "HIT_STOP_LOSS"
+            elif trade.get("liquidation_price", 0.0) > 0 and check_high >= trade["liquidation_price"]:
+                hit_sl = True
+                exit_price = trade["liquidation_price"]
+                exit_reason = "LIQUIDATION"
 
         if hit_tp or hit_sl:
-            fee_exit = trade["allocated_usd"] * 0.00075
+            fee_exit = trade["allocated_usd"] * 0.0005  # 5 bps futures fee
             total_fees = trade["fee_entry_usd"] + fee_exit
             gross_pnl = (
                 (exit_price - trade["entry_price"]) * trade["amount"]
-                if trade["side"] == "BUY"
+                if is_long
                 else (trade["entry_price"] - exit_price) * trade["amount"]
             )
             net_pnl = gross_pnl - total_fees
-            net_pnl_pct = (net_pnl / trade["allocated_usd"]) * 100.0
+            margin_usd = trade.get("margin_usd", trade["allocated_usd"])
+            net_pnl_pct = (net_pnl / margin_usd) * 100.0
 
             exit_timestamp = event_time or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
             trade["status"] = "CLOSED_WIN" if net_pnl > 0 else "CLOSED_LOSS"
-            trade["exit_price"] = round(exit_price, 2)
+            trade["exit_price"] = round(exit_price, 4)
             trade["exit_time"] = exit_timestamp
             trade["exit_reason"] = exit_reason
             trade["realized_pnl_usd"] = round(net_pnl, 2)
@@ -152,22 +164,23 @@ class LiveMarketObserver:
             # Update risk guardian
             self.risk_guardian.update_portfolio_state(
                 current_total_usd=self.risk_guardian.total_capital + net_pnl,
-                active_exposure_usd=max(0.0, self.risk_guardian.active_exposure_usd - trade["allocated_usd"]),
+                active_exposure_usd=max(0.0, self.risk_guardian.active_exposure_usd - margin_usd),
             )
 
             logger.info(
-                f"TRADE RESOLVED: [{pair}] {trade['trade_id']} | Outcome: {trade['status']} | Net PnL: ${net_pnl:+,.2f} ({net_pnl_pct:+.2f}%)"
+                f"FUTURES TRADE RESOLVED: [{pair}] {trade['trade_id']} | Side: {trade['side']} | Outcome: {trade['status']} | Net ROE: ${net_pnl:+,.2f} ({net_pnl_pct:+.2f}%)"
             )
         else:
             # Update unrealized trajectory
             current_unrealized = (
                 (current_price - trade["entry_price"]) * trade["amount"]
-                if trade["side"] == "BUY"
+                if is_long
                 else (trade["entry_price"] - current_price) * trade["amount"]
             )
+            margin_usd = trade.get("margin_usd", trade["allocated_usd"])
             trade["current_price"] = current_price
             trade["unrealized_pnl_usd"] = round(current_unrealized, 2)
-            trade["unrealized_pnl_pct"] = round((current_unrealized / trade["allocated_usd"]) * 100.0, 2)
+            trade["unrealized_pnl_pct"] = round((current_unrealized / margin_usd) * 100.0, 2)
 
         return resolved
 
@@ -230,6 +243,27 @@ class LiveMarketObserver:
         # 4. Independent Risk Guardian
         verdict = self.risk_guardian.evaluate_decision(decision, current_price)
 
+        # 4b. Strict Chart Analysis & Momentum Overextension Filter
+        strict_mode = getattr(self.config.risk, "strict_chart_analysis", True)
+        if verdict.approved and strict_mode and len(feat_df) >= 20:
+            dist_to_ema20 = float(latest_bar.get("dist_to_ema20_pct", 0.0))
+            rsi_val = float(latest_bar.get("rsi_14", 50.0))
+            strat = decision.selected_strategy
+
+            # Veto buying tops of parabolic pumps or shorting bottoms of dumps
+            if verdict.action in ["BUY", "LONG"] and rsi_val > 73.0 and "BreakoutMomentum" not in strat:
+                verdict.approved = False
+                verdict.veto_reason = f"Strict Chart Filter: RSI overbought ({rsi_val:.1f}) without breakout volume surge"
+            elif verdict.action in ["SELL", "SHORT"] and rsi_val < 27.0 and "BreakoutMomentum" not in strat:
+                verdict.approved = False
+                verdict.veto_reason = f"Strict Chart Filter: RSI oversold ({rsi_val:.1f}) without breakdown volume surge"
+            elif verdict.action in ["BUY", "LONG"] and dist_to_ema20 > 0.045:
+                verdict.approved = False
+                verdict.veto_reason = f"Strict Chart Filter: Price extended {dist_to_ema20:.1%} above EMA20 (chasing risk)"
+            elif verdict.action in ["SELL", "SHORT"] and dist_to_ema20 < -0.045:
+                verdict.approved = False
+                verdict.veto_reason = f"Strict Chart Filter: Price extended {dist_to_ema20:.1%} below EMA20 (shorting bottom risk)"
+
         # 5. Log decision row (deduplicate within the same candle bar per pair)
         decision_entry = {
             "timestamp": current_time,
@@ -256,35 +290,55 @@ class LiveMarketObserver:
         # 6. Mark New Trade if approved and no trade currently open on this pair
         new_trade = None
         if verdict.approved and pair not in self.active_trades:
-            trade_id = f"MRK_{self.trade_counter:04d}"
-            self.trade_counter += 1
+            max_positions = getattr(self.config.exchange, "max_active_positions", 5)
+            if len(self.active_trades) >= max_positions:
+                logger.info(f"Skipping trade on {pair}: Max active positions ceiling ({max_positions}) reached.")
+            else:
+                trade_id = f"FUT_{self.trade_counter:04d}"
+                self.trade_counter += 1
 
-            entry_fee = verdict.allocated_usd * 0.00075
-            new_trade = {
-                "trade_id": trade_id,
-                "pair": pair,
-                "status": "OPEN",
-                "side": verdict.action,
-                "entry_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "exit_time": "IN_PROGRESS",
-                "entry_price": current_price,
-                "current_price": current_price,
-                "exit_price": 0.0,
-                "allocated_usd": verdict.allocated_usd,
-                "amount": verdict.position_size_asset,
-                "stop_loss": verdict.stop_loss_price,
-                "take_profit": verdict.take_profit_price,
-                "risk_reward_ratio": verdict.risk_reward_ratio,
-                "fee_entry_usd": round(entry_fee, 4),
-                "unrealized_pnl_usd": 0.0,
-                "unrealized_pnl_pct": 0.0,
-                "realized_pnl_usd": 0.0,
-                "realized_pnl_pct": 0.0,
-                "exit_reason": "MONITORING",
-                "thesis_confirmed": "PENDING",
-                "strategy_rationale": decision.explanation,
-            }
-            self.active_trades[pair] = new_trade
+                leverage = getattr(verdict, "leverage", 3)
+                margin_usd = getattr(verdict, "margin_usd", round(verdict.allocated_usd / leverage, 2))
+                entry_fee = verdict.allocated_usd * 0.0005  # 5 bps futures taker fee
+                trade_side = "LONG" if verdict.action in ["BUY", "LONG"] else "SHORT"
+
+                new_trade = {
+                    "trade_id": trade_id,
+                    "pair": pair,
+                    "status": "OPEN",
+                    "side": trade_side,
+                    "leverage": f"{leverage}x",
+                    "margin_usd": margin_usd,
+                    "entry_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "exit_time": "IN_PROGRESS",
+                    "entry_price": current_price,
+                    "current_price": current_price,
+                    "exit_price": 0.0,
+                    "allocated_usd": verdict.allocated_usd,  # Notional position size
+                    "amount": verdict.position_size_asset,
+                    "stop_loss": verdict.stop_loss_price,
+                    "take_profit": verdict.take_profit_price,
+                    "liquidation_price": getattr(verdict, "liquidation_price", 0.0),
+                    "risk_reward_ratio": verdict.risk_reward_ratio,
+                    "fee_entry_usd": round(entry_fee, 4),
+                    "unrealized_pnl_usd": 0.0,
+                    "unrealized_pnl_pct": 0.0,
+                    "realized_pnl_usd": 0.0,
+                    "realized_pnl_pct": 0.0,
+                    "exit_reason": "MONITORING",
+                    "thesis_confirmed": "PENDING",
+                    "strategy_rationale": decision.explanation,
+                }
+                self.active_trades[pair] = new_trade
+
+                self.risk_guardian.update_portfolio_state(
+                    current_total_usd=self.risk_guardian.total_capital,
+                    active_exposure_usd=self.risk_guardian.active_exposure_usd + margin_usd,
+                )
+
+                logger.info(
+                    f"FUTURES TRADE MARKED: [{pair}] {trade_id} | Side: {trade_side} | Leverage: {leverage}x | Margin: ${margin_usd:,.2f} | Notional: ${verdict.allocated_usd:,.2f} | TP: ${verdict.take_profit_price} | SL: ${verdict.stop_loss_price}"
+                )
 
             self.risk_guardian.update_portfolio_state(
                 current_total_usd=self.risk_guardian.total_capital,
@@ -382,9 +436,9 @@ class LiveMarketObserver:
         ws_trades.views.sheetView[0].showGridLines = True
 
         trade_headers = [
-            "Trade ID", "Status", "Pair", "Side", "Entry Time", "Exit Time",
-            "Entry Price ($)", "Current/Exit Price ($)", "Target TP ($)", "Stop Loss ($)",
-            "Risk/Reward", "Allocated ($)", "Realized PnL ($)", "Realized PnL (%)",
+            "Trade ID", "Status", "Pair", "Side", "Leverage", "Margin ($)", "Entry Time", "Exit Time",
+            "Entry Price ($)", "Current/Exit Price ($)", "Target TP ($)", "Stop Loss ($)", "Liq Price ($)",
+            "Risk/Reward", "Notional ($)", "Realized PnL ($)", "ROE (%)",
             "Outcome / Exit Reason", "Thesis Confirmed?", "Strategy Rationale"
         ]
 
@@ -406,12 +460,15 @@ class LiveMarketObserver:
                 status,
                 t["pair"],
                 t["side"],
+                t.get("leverage", "3x"),
+                t.get("margin_usd", round(t["allocated_usd"] / 3.0, 2)),
                 t["entry_time"],
                 t["exit_time"],
                 t["entry_price"],
                 curr_exit,
                 t["take_profit"],
                 t["stop_loss"],
+                t.get("liquidation_price", 0.0),
                 t["risk_reward_ratio"],
                 t["allocated_usd"],
                 pnl_usd,
@@ -438,11 +495,17 @@ class LiveMarketObserver:
                         c.fill = yellow_fill
                         c.font = yellow_font
                 # Highlight PnL
-                elif c_idx == 13 or c_idx == 14:
-                    if float(val) > 0:
-                        c.fill = green_fill
-                        c.font = green_font
-                    elif float(val) < 0:
+                elif c_idx == 16 or c_idx == 17:
+                    try:
+                        f_val = float(val)
+                        if f_val > 0:
+                            c.fill = green_fill
+                            c.font = green_font
+                        elif f_val < 0:
+                            c.fill = red_fill
+                            c.font = red_font
+                    except (ValueError, TypeError):
+                        pass
                         c.fill = red_fill
                         c.font = red_font
 
@@ -555,9 +618,9 @@ class LiveMarketObserver:
 
                 # 2. Trades Matrix
                 trade_headers = [
-                    "Trade ID", "Status", "Pair", "Side", "Entry Time", "Exit Time",
-                    "Entry Price ($)", "Current/Exit Price ($)", "Target TP ($)", "Stop Loss ($)",
-                    "Risk/Reward", "Allocated ($)", "Realized PnL ($)", "Realized PnL (%)",
+                    "Trade ID", "Status", "Pair", "Side", "Leverage", "Margin ($)", "Entry Time", "Exit Time",
+                    "Entry Price ($)", "Current/Exit Price ($)", "Target TP ($)", "Stop Loss ($)", "Liq Price ($)",
+                    "Risk/Reward", "Notional ($)", "Realized PnL ($)", "ROE (%)",
                     "Outcome / Exit Reason", "Thesis Confirmed?", "Strategy Rationale"
                 ]
                 trade_rows = [trade_headers]
@@ -567,12 +630,15 @@ class LiveMarketObserver:
                         t.get("status", ""),
                         t.get("pair", ""),
                         t.get("side", ""),
+                        t.get("leverage", "3x"),
+                        str(t.get("margin_usd", round(t.get("allocated_usd", 0.0) / 3.0, 2))),
                         t.get("entry_time", ""),
                         t.get("exit_time", ""),
                         str(t.get("entry_price", "")),
                         str(t.get("current_price", "")),
                         str(t.get("take_profit", "")),
                         str(t.get("stop_loss", "")),
+                        str(t.get("liquidation_price", "0.0")),
                         str(t.get("risk_reward_ratio", "")),
                         str(t.get("allocated_usd", "")),
                         str(t.get("realized_pnl_usd", "")),
@@ -621,14 +687,40 @@ class LiveMarketObserver:
         threading.Thread(target=_worker, daemon=True).start()
 
     async def run_continuous_observation(self, cycles: Optional[int] = None):
-        """Runs the continuous market scanner and live outcome tracking loop."""
+        """Runs the continuous market scanner and live outcome tracking loop across perpetual futures."""
         self.running = True
         logger.info(f"Live Market Observer active. Target Excel: {self.excel_path}")
-        logger.info(f"Pairs: {self.config.exchange.pairs} | Interval: {self.interval}s")
+        logger.info(f"Market Type: {self.client.market_type} | Interval: {self.interval}s")
+
+        # Discover top liquid perpetual coins across the whole market
+        universe_pairs = list(self.config.exchange.pairs)
+        if getattr(self.config.exchange, "auto_screen_universe", True):
+            try:
+                top_pairs = self.client.get_top_perpetual_pairs(
+                    limit=getattr(self.config.exchange, "screen_top_n_pairs", 20),
+                    min_24h_volume_usd=50_000_000.0,
+                )
+                if top_pairs:
+                    universe_pairs = top_pairs
+                    logger.info(f"Cross-Market Screener loaded {len(universe_pairs)} top perpetual coins: {universe_pairs[:10]}...")
+            except Exception as e:
+                logger.warning(f"Failed to auto-screen perpetual universe: {e}")
 
         count = 0
         while self.running:
-            for pair in self.config.exchange.pairs:
+            # Refresh top liquid universe every 20 cycles (~5 min)
+            if count > 0 and count % 20 == 0 and getattr(self.config.exchange, "auto_screen_universe", True):
+                try:
+                    refreshed = self.client.get_top_perpetual_pairs(
+                        limit=getattr(self.config.exchange, "screen_top_n_pairs", 20),
+                        min_24h_volume_usd=50_000_000.0,
+                    )
+                    if refreshed:
+                        universe_pairs = refreshed
+                except Exception:
+                    pass
+
+            for pair in universe_pairs:
                 try:
                     self.scan_and_analyze(pair)
                 except Exception as e:

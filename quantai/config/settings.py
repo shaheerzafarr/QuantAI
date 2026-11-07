@@ -34,8 +34,12 @@ class ExecutionMode(str, Enum):
 
 class ExchangeConfig(BaseModel):
     name: str = "binance"
-    market_type: str = "spot"
-    pairs: List[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
+    market_type: str = "futures"  # "spot" or "futures"
+    default_leverage: int = 3
+    max_active_positions: int = 5
+    auto_screen_universe: bool = True
+    screen_top_n_pairs: int = 20
+    pairs: List[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT"])
     timeframes: List[str] = Field(default_factory=lambda: ["1m", "5m", "15m", "1h", "4h", "1d"])
     primary_timeframe: str = "5m"
     base_currency: str = "USDT"
@@ -64,7 +68,8 @@ class RiskConfig(BaseModel):
     kelly_fraction: float = Field(default=0.35, description="Fractional Kelly multiplier")
     emergency_shutdown_enabled: bool = True
     enforce_circuit_breakers: bool = True
-    min_risk_reward_ratio: float = 1.8
+    min_risk_reward_ratio: float = 2.0
+    strict_chart_analysis: bool = True
 
 
 class WhaleConfig(BaseModel):
