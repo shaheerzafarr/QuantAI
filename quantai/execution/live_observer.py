@@ -320,7 +320,7 @@ class LiveMarketObserver:
         # 6. Mark New Trade if approved and no trade currently open on this pair
         new_trade = None
         if verdict.approved and pair not in self.active_trades:
-            max_positions = getattr(self.config.exchange, "max_active_positions", 4)
+            max_positions = getattr(self.config.exchange, "max_active_positions", 7)
             if len(self.active_trades) >= max_positions:
                 logger.info(f"Skipping trade on {pair}: Max active positions ceiling ({max_positions}) reached.")
             else:

@@ -101,9 +101,9 @@ class IndependentRiskGuardian:
 
         fractional_kelly = kelly_full * self.risk_cfg.kelly_fraction
         if self.total_capital <= 250.0:
-            # Scaled margin for $100 portfolio:
-            # Target 15% - 20% margin ($15 - $20) to clear futures min order ($5 - $10 notional) comfortably
-            target_allocation_pct = max(0.15, min(0.20, fractional_kelly))
+            # Scaled margin for $100 portfolio to allow 6-8 concurrent trades:
+            # Target 10% - 12% margin ($10 - $12) to clear futures min order ($5 - $10 notional) comfortably
+            target_allocation_pct = max(0.10, min(0.12, fractional_kelly))
         elif self.total_capital <= 1000.0:
             # Scaled margin for small portfolio ($500 capital):
             target_allocation_pct = max(0.04, min(0.06, fractional_kelly))
@@ -181,7 +181,7 @@ class IndependentRiskGuardian:
             expected_win_loss_ratio=rr_ratio,
         )
 
-        min_margin = 10.0 if getattr(self.config.exchange, "market_type", "futures") == "futures" else 15.0
+        min_margin = 8.0 if getattr(self.config.exchange, "market_type", "futures") == "futures" else 15.0
         if allocated_usd < min_margin:
             return self._veto(
                 decision.pair,

@@ -36,7 +36,7 @@ class ExchangeConfig(BaseModel):
     name: str = "binance"
     market_type: str = "futures"  # "spot" or "futures"
     default_leverage: int = 3
-    max_active_positions: int = 4
+    max_active_positions: int = 7
     auto_screen_universe: bool = True
     screen_top_n_pairs: int = 20
     pairs: List[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT"])
