@@ -152,3 +152,31 @@ class WhaleIntelligenceEngine:
             smart_money_score=78.5,  # Baseline score for verified institutional flows
             actionable_signal=actionable,
         )
+
+    def evaluate_live_whale_tape(self, symbol: str, whale_data: Dict[str, Any]) -> Optional[WhaleSignal]:
+        """Converts live Binance Futures aggregated whale orderflow into a structured WhaleSignal."""
+        count = whale_data.get("whale_trade_count", 0)
+        net_delta = whale_data.get("whale_net_delta_usd", 0.0)
+        bias = whale_data.get("whale_bias", "NEUTRAL")
+        total_vol = whale_data.get("whale_buy_vol_usd", 0.0) + whale_data.get("whale_sell_vol_usd", 0.0)
+
+        if count == 0 or total_vol == 0:
+            return None
+
+        actionable = bias in ["BULLISH", "BEARISH"] and abs(net_delta) >= 50_000.0
+        conf = 0.85 if abs(net_delta) >= 150_000.0 else (0.75 if actionable else 0.50)
+        smart_money = round(min(95.0, 50.0 + (abs(net_delta) / total_vol) * 45.0), 1)
+
+        return WhaleSignal(
+            event_id=f"WHALE_TAPE_{int(datetime.now(timezone.utc).timestamp())}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            asset=symbol,
+            event_type="INSTITUTIONAL_SWEEP" if abs(net_delta) >= 100_000 else "ORDERFLOW_ACCUMULATION",
+            usd_value=total_vol,
+            source_category="BINANCE_FUTURES_TAPE",
+            dest_category="AGGRESSIVE_TAKERS",
+            signal_bias=bias,
+            attribution_confidence=conf,
+            smart_money_score=smart_money,
+            actionable_signal=actionable,
+        )

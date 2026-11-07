@@ -32,9 +32,15 @@ class TradeDecision:
 class DecisionFusionEngine:
     """Fuses Multi-Agent reports, ML predictions, and quantitative strategy signals."""
 
-    def __init__(self, min_confidence: float = 0.55, min_expected_edge_bps: float = 8.0):
+    def __init__(
+        self,
+        min_confidence: float = 0.55,
+        min_expected_edge_bps: float = 8.0,
+        min_strategy_confluence: int = 1,
+    ):
         self.min_confidence = min_confidence
         self.min_edge_bps = min_expected_edge_bps
+        self.min_strategy_confluence = min_strategy_confluence
         self.db_manager = get_db_manager()
 
     def fuse_signals(
@@ -133,16 +139,36 @@ class DecisionFusionEngine:
         # 5. Economic Hurdle & Edge Calculation
         total_cost_bps = exchange_fee_bps * 2 + estimated_slippage_bps  # roundtrip fees + slippage
 
+        # Multi-Strategy Confluence Check:
+        # Requires >= min_strategy_confluence independent strategies OR 1 strategy + strong whale confirmation
+        has_whale_confirmation = any(
+            r.agent_name in ["WhaleAnalyst", "LiquidityAnalyst"]
+            and r.confidence >= 0.70
+            and ((p_combined > 0.50 and r.bias == "BULLISH") or (p_combined < 0.50 and r.bias == "BEARISH"))
+            for r in agent_reports
+        )
+        sufficient_confluence = (
+            len(active_strategies) >= self.min_strategy_confluence
+            or (len(active_strategies) >= 1 and has_whale_confirmation)
+        ) if self.min_strategy_confluence > 1 else True
+
         if p_combined > 0.50:
             confidence = p_combined
             gross_edge_bps = (confidence - 0.50) * 450.0  # Scaled to expected swing move basis points
             net_edge_bps = gross_edge_bps - total_cost_bps
 
             if confidence >= self.min_confidence and net_edge_bps >= self.min_edge_bps:
-                action = "BUY"
-                explanation = (
-                    f"Strong bullish confluence across {len(supporting)} signals ({strategy_name}) with net edge of {net_edge_bps:.1f} bps."
-                )
+                if not sufficient_confluence:
+                    action = "NO_TRADE"
+                    explanation = (
+                        f"Bullish setup detected ({strategy_name}) but lacks multi-strategy confirmation "
+                        f"({len(active_strategies)}/{self.min_strategy_confluence} strategies). Awaiting secondary confluence."
+                    )
+                else:
+                    action = "BUY"
+                    explanation = (
+                        f"Strong bullish confluence across {len(supporting)} signals ({strategy_name}) with net edge of {net_edge_bps:.1f} bps."
+                    )
             elif confidence >= self.min_confidence:
                 action = "NO_TRADE"
                 explanation = (
@@ -157,10 +183,17 @@ class DecisionFusionEngine:
             net_edge_bps = gross_edge_bps - total_cost_bps
 
             if confidence >= self.min_confidence and net_edge_bps >= self.min_edge_bps:
-                action = "SELL"
-                explanation = (
-                    f"Strong bearish breakdown signaled by {len(contradictory)} indicators ({strategy_name}). Net edge: {net_edge_bps:.1f} bps."
-                )
+                if not sufficient_confluence:
+                    action = "NO_TRADE"
+                    explanation = (
+                        f"Bearish setup detected ({strategy_name}) but lacks multi-strategy confirmation "
+                        f"({len(active_strategies)}/{self.min_strategy_confluence} strategies). Awaiting secondary confluence."
+                    )
+                else:
+                    action = "SELL"
+                    explanation = (
+                        f"Strong bearish breakdown signaled by {len(contradictory)} indicators ({strategy_name}). Net edge: {net_edge_bps:.1f} bps."
+                    )
             elif confidence >= self.min_confidence:
                 action = "NO_TRADE"
                 explanation = "Bearish bias detected but expected net edge does not exceed cost hurdle."

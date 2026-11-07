@@ -27,6 +27,8 @@ from quantai.ml.pipeline import QuantMLModel
 from quantai.agents.swarm import MultiAgentSwarm
 from quantai.decision.engine import DecisionFusionEngine
 from quantai.risk.guardian import IndependentRiskGuardian
+from quantai.intelligence.whale.engine import WhaleIntelligenceEngine
+from quantai.intelligence.sentiment.news_feed import LiveNewsFeedAnalyzer
 from quantai.research.strategies import (
     TrendFollowingStrategy,
     MeanReversionStrategy,
@@ -73,7 +75,9 @@ class LiveMarketObserver:
             CandlestickPatternStrategy(),
             RangeCompressionScalper(),
         ]
-        self.decision_engine = DecisionFusionEngine(min_confidence=0.55, min_expected_edge_bps=8.0)
+        self.whale_engine = WhaleIntelligenceEngine()
+        self.news_analyzer = LiveNewsFeedAnalyzer(cache_ttl_seconds=180.0)
+        self.decision_engine = DecisionFusionEngine(min_confidence=0.70, min_expected_edge_bps=12.0, min_strategy_confluence=2)
         self.risk_guardian = IndependentRiskGuardian(initial_capital_usd=initial_capital)
         # Allow multi-asset deployment across all feasible trades in screened universe
         self.risk_guardian.risk_cfg.max_portfolio_exposure_pct = 0.90
@@ -218,7 +222,13 @@ class LiveMarketObserver:
             event_time=current_time,
         )
 
-        # 2. Build multi-agent context
+        # 2. Ingest Live Binance Whale Aggregated Orderflow & Breaking News Feed
+        whale_data = self.client.fetch_recent_whale_trades(pair, limit=300, min_notional_usd=50_000.0)
+        whale_sig = self.whale_engine.evaluate_live_whale_tape(pair, whale_data)
+        news_data = self.news_analyzer.evaluate_token_sentiment(pair)
+        sent_sig = self.news_analyzer.build_sentiment_signal(pair)
+
+        # 3. Build comprehensive multi-agent context
         context = {
             "symbol": pair,
             "features_df": feat_df,
@@ -228,9 +238,11 @@ class LiveMarketObserver:
             "spread": 0.01,
             "estimated_slippage_bps": 2.5,
             "consensus_hint": "NEUTRAL",
+            "whale_signal": whale_sig,
+            "sentiment_signal": sent_sig,
         }
 
-        # 3. Deliberate with 12-Agent Swarm, Chart Strategies, and ML
+        # 4. Deliberate with 12-Agent Swarm, Chart Strategies, and ML
         reports = self.swarm.run_swarm(context)
         strat_signals = [s.generate_signal(feat_df, symbol=pair) for s in self.strategies]
         ml_pred = self.ml_model.predict_latest(latest_bar, symbol=pair)
@@ -242,10 +254,10 @@ class LiveMarketObserver:
             estimated_slippage_bps=2.5,
         )
 
-        # 4. Independent Risk Guardian
+        # 5. Independent Risk Guardian
         verdict = self.risk_guardian.evaluate_decision(decision, current_price)
 
-        # 4b. Strict Chart Analysis & Momentum Overextension Filter
+        # 5b. Strict Multi-Layer Filters: Chart Overextension, Whale Flow & News Shock
         strict_mode = getattr(self.config.risk, "strict_chart_analysis", True)
         if verdict.approved and strict_mode and len(feat_df) >= 20:
             dist_to_ema20 = float(latest_bar.get("dist_to_ema20_pct", 0.0))
@@ -265,6 +277,22 @@ class LiveMarketObserver:
             elif verdict.action in ["SELL", "SHORT"] and dist_to_ema20 < -0.045:
                 verdict.approved = False
                 verdict.veto_reason = f"Strict Chart Filter: Price extended {dist_to_ema20:.1%} below EMA20 (shorting bottom risk)"
+
+            # Whale Orderflow Confirmation & Veto Guard
+            whale_bias = whale_data.get("whale_bias", "NEUTRAL")
+            whale_delta = whale_data.get("whale_net_delta_usd", 0.0)
+            if verdict.approved and verdict.action in ["BUY", "LONG"] and whale_bias == "BEARISH" and whale_delta < -75_000.0:
+                verdict.approved = False
+                verdict.veto_reason = f"Whale Tape Veto: Institutional sell delta (${whale_delta:,.0f}) contradicts BUY"
+            elif verdict.approved and verdict.action in ["SELL", "SHORT"] and whale_bias == "BULLISH" and whale_delta > 75_000.0:
+                verdict.approved = False
+                verdict.veto_reason = f"Whale Tape Veto: Institutional buy delta (${whale_delta:,.0f}) contradicts SHORT"
+
+            # Live Breaking News Shock Veto Guard
+            if verdict.approved and verdict.action in ["BUY", "LONG"] and news_data.get("has_negative_shock", False):
+                verdict.approved = False
+                shock = news_data["negative_shocks"][0] if news_data.get("negative_shocks") else "Regulatory Shock"
+                verdict.veto_reason = f"Breaking News Veto: {shock}"
 
         # 5. Log decision row (deduplicate within the same candle bar per pair)
         decision_entry = {
@@ -292,7 +320,7 @@ class LiveMarketObserver:
         # 6. Mark New Trade if approved and no trade currently open on this pair
         new_trade = None
         if verdict.approved and pair not in self.active_trades:
-            max_positions = getattr(self.config.exchange, "max_active_positions", 15)
+            max_positions = getattr(self.config.exchange, "max_active_positions", 4)
             if len(self.active_trades) >= max_positions:
                 logger.info(f"Skipping trade on {pair}: Max active positions ceiling ({max_positions}) reached.")
             else:
@@ -303,6 +331,9 @@ class LiveMarketObserver:
                 margin_usd = getattr(verdict, "margin_usd", round(verdict.allocated_usd / leverage, 2))
                 entry_fee = verdict.allocated_usd * 0.0005  # 5 bps futures taker fee
                 trade_side = "LONG" if verdict.action in ["BUY", "LONG"] else "SHORT"
+
+                whale_info = f"Whales: {whale_data.get('whale_bias', 'NEUTRAL')} (${whale_data.get('whale_net_delta_usd', 0):+,.0f})"
+                news_info = f"News: {news_data.get('bias', 'NEUTRAL')} (score: {news_data.get('sentiment_score', 0):+.2f})"
 
                 new_trade = {
                     "trade_id": trade_id,
@@ -329,7 +360,7 @@ class LiveMarketObserver:
                     "realized_pnl_pct": 0.0,
                     "exit_reason": "MONITORING",
                     "thesis_confirmed": "PENDING",
-                    "strategy_rationale": decision.explanation,
+                    "strategy_rationale": f"{decision.explanation} | {whale_info} | {news_info}",
                 }
                 self.active_trades[pair] = new_trade
 

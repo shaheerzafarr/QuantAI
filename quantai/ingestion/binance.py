@@ -147,6 +147,68 @@ class BinanceMarketDataClient:
             logger.warning(f"Error fetching Binance depth for {symbol}: {e}. Generating synthetic depth.")
             return self.generate_synthetic_depth(symbol)
 
+    def fetch_recent_whale_trades(
+        self, symbol: str = "BTCUSDT", limit: int = 500, min_notional_usd: float = 50_000.0
+    ) -> Dict[str, Any]:
+        """Fetches recent aggregated trades from Binance Futures and analyzes institutional blocks."""
+        clean_symbol = symbol.replace("/", "").upper()
+        url = f"{self.base_url}/aggTrades"
+        params = {"symbol": clean_symbol, "limit": limit}
+        try:
+            resp = self._session.get(url, params=params, timeout=5)
+            resp.raise_for_status()
+            trades = resp.json()
+            whale_buys = 0.0
+            whale_sells = 0.0
+            whale_trades = []
+            for t in trades:
+                p = float(t.get("p", 0.0))
+                q = float(t.get("q", 0.0))
+                notional = p * q
+                if notional >= min_notional_usd:
+                    is_taker_sell = t.get("m", False)  # True = buyer is maker, taker is seller
+                    side = "SELL" if is_taker_sell else "BUY"
+                    if not is_taker_sell:
+                        whale_buys += notional
+                    else:
+                        whale_sells += notional
+                    whale_trades.append({
+                        "price": p,
+                        "qty": q,
+                        "notional": round(notional, 2),
+                        "side": side,
+                        "timestamp": t.get("T", 0),
+                    })
+            net_delta = whale_buys - whale_sells
+            total_whale_vol = whale_buys + whale_sells
+            bias = "NEUTRAL"
+            if total_whale_vol > 0:
+                delta_ratio = net_delta / total_whale_vol
+                if delta_ratio > 0.20:
+                    bias = "BULLISH"
+                elif delta_ratio < -0.20:
+                    bias = "BEARISH"
+            return {
+                "symbol": symbol,
+                "whale_trade_count": len(whale_trades),
+                "whale_buy_vol_usd": round(whale_buys, 2),
+                "whale_sell_vol_usd": round(whale_sells, 2),
+                "whale_net_delta_usd": round(net_delta, 2),
+                "whale_bias": bias,
+                "recent_whales": whale_trades[-5:],
+            }
+        except Exception as e:
+            logger.debug(f"Error fetching whale trades for {symbol}: {e}")
+            return {
+                "symbol": symbol,
+                "whale_trade_count": 0,
+                "whale_buy_vol_usd": 0.0,
+                "whale_sell_vol_usd": 0.0,
+                "whale_net_delta_usd": 0.0,
+                "whale_bias": "NEUTRAL",
+                "recent_whales": [],
+            }
+
     def generate_synthetic_candles(
         self, symbol: str, timeframe: str = "5m", limit: int = 100
     ) -> List[CandleData]:
